@@ -17,6 +17,13 @@ from .config_utils import (
     apply_param_overrides as apply_config_overrides,
     merge_configs,
 )
+from .runner import (
+    BacktestMetrics,
+    run_backtest_for_strategy,
+    run_train_test_backtest,
+    run_multi_symbol_backtest,
+    aggregate_backtest_metrics,
+)
 
 __all__ = [
     # Experiment runners
@@ -34,4 +41,10 @@ __all__ = [
     "set_nested",
     "apply_config_overrides",
     "merge_configs",
+    # Backtest runner
+    "BacktestMetrics",
+    "run_backtest_for_strategy",
+    "run_train_test_backtest",
+    "run_multi_symbol_backtest",
+    "aggregate_backtest_metrics",
 ]

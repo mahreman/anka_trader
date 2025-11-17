@@ -16,10 +16,9 @@ from sqlalchemy.orm import Session
 
 from ..config import load_strategy, StrategyConfig
 from ..data import Experiment, ExperimentRun
-from ..eval.portfolio_backtest import run_backtest
-from ..eval.performance_report import calculate_metrics
 from .grid import ParamGrid
 from .config_utils import apply_param_overrides as apply_config_overrides
+from .runner import run_train_test_backtest
 
 logger = logging.getLogger(__name__)
 
@@ -183,56 +182,39 @@ def run_single_experiment_run(
         # Use first symbol (or could aggregate across all symbols)
         symbol = symbols[0] if symbols else modified_config.get_symbols()[0]
 
-        # Run training backtest
-        logger.info(f"Training backtest: {symbol} {train_start} to {train_end}")
-        train_result = run_backtest(
+        # Parse dates
+        from datetime import datetime as dt
+        train_start_date = dt.strptime(train_start, "%Y-%m-%d").date()
+        train_end_date = dt.strptime(train_end, "%Y-%m-%d").date()
+        test_start_date = dt.strptime(test_start, "%Y-%m-%d").date() if test_start else None
+        test_end_date = dt.strptime(test_end, "%Y-%m-%d").date() if test_end else None
+
+        # Run train/test backtest using runner
+        metrics = run_train_test_backtest(
             session=session,
             symbol=symbol,
-            start_date=train_start,
-            end_date=train_end,
-            initial_cash=modified_config.get_initial_capital(),
-            risk_per_trade=modified_config.get_risk_per_trade_pct() / 100,
-            use_ensemble=modified_config.get("ensemble.enabled", True),
+            strategy_cfg=modified_config.raw_config,
+            train_start=train_start_date,
+            train_end=train_end_date,
+            test_start=test_start_date,
+            test_end=test_end_date,
         )
 
-        if train_result and train_result.get("equity_curve"):
-            train_metrics = calculate_metrics(
-                train_result["equity_curve"],
-                train_result.get("trades", []),
-                modified_config.get_initial_capital(),
-            )
+        # Extract train metrics
+        train_metrics = metrics["train"]
+        exp_run.train_cagr = train_metrics.cagr
+        exp_run.train_sharpe = train_metrics.sharpe
+        exp_run.train_max_dd = train_metrics.max_dd
+        exp_run.train_win_rate = train_metrics.win_rate
+        exp_run.train_total_trades = train_metrics.total_trades
 
-            exp_run.train_cagr = train_metrics["cagr"]
-            exp_run.train_sharpe = train_metrics["sharpe_ratio"]
-            exp_run.train_max_dd = train_metrics["max_drawdown"]
-            exp_run.train_win_rate = train_metrics["win_rate"]
-            exp_run.train_total_trades = train_metrics["total_trades"]
-
-        # Run test backtest (if specified)
-        if test_start and test_end:
-            logger.info(f"Test backtest: {symbol} {test_start} to {test_end}")
-            test_result = run_backtest(
-                session=session,
-                symbol=symbol,
-                start_date=test_start,
-                end_date=test_end,
-                initial_cash=modified_config.get_initial_capital(),
-                risk_per_trade=modified_config.get_risk_per_trade_pct() / 100,
-                use_ensemble=modified_config.get("ensemble.enabled", True),
-            )
-
-            if test_result and test_result.get("equity_curve"):
-                test_metrics = calculate_metrics(
-                    test_result["equity_curve"],
-                    test_result.get("trades", []),
-                    modified_config.get_initial_capital(),
-                )
-
-                exp_run.test_cagr = test_metrics["cagr"]
-                exp_run.test_sharpe = test_metrics["sharpe_ratio"]
-                exp_run.test_max_dd = test_metrics["max_drawdown"]
-                exp_run.test_win_rate = test_metrics["win_rate"]
-                exp_run.test_total_trades = test_metrics["total_trades"]
+        # Extract test metrics
+        test_metrics = metrics["test"]
+        exp_run.test_cagr = test_metrics.cagr
+        exp_run.test_sharpe = test_metrics.sharpe
+        exp_run.test_max_dd = test_metrics.max_dd
+        exp_run.test_win_rate = test_metrics.win_rate
+        exp_run.test_total_trades = test_metrics.total_trades
 
         # Mark as done
         exp_run.status = "done"
