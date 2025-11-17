@@ -1,0 +1,245 @@
+---
+# Baseline v1 Strategy Configuration
+# =================================
+# This is the baseline trading strategy that combines:
+# - Analist-1: Technical anomaly detection
+# - Analist-2: News/Macro/LLM sentiment
+# - Analist-3: Regime/DSI risk assessment
+# - Portfolio constraints and risk management
+
+name: "baseline_v1"
+description: "Multi-analyst ensemble strategy with risk management"
+version: "1.0.0"
+created: "2025-01-17"
+
+# =================================
+# Data Sources
+# =================================
+data_sources:
+  price_data:
+    provider: "yfinance"  # or "binance", "alpaca", etc.
+    symbols:
+      - "BTC-USD"
+      - "ETH-USD"
+      - "GC=F"    # Gold futures
+      - "^GSPC"   # S&P 500
+    frequency: "daily"
+    lookback_days: 365  # For regime/volatility calculation
+
+  news_data:
+    enabled: true
+    source_type: "csv"  # or "json", "api"
+    lookback_days: 3
+
+  macro_calendar:
+    enabled: true
+    source_type: "csv"
+    lookback_days: 7
+    region: "US"
+
+  llm:
+    enabled: true
+    providers:
+      - "deepseek"   # Primary
+      - "openai"     # Fallback 1
+      - "ollama"     # Fallback 2 (local)
+    fallback_to_heuristic: true
+
+# =================================
+# Analist-1: Technical Anomaly Detection
+# =================================
+analist_1:
+  enabled: true
+  weight: 1.0
+
+  anomaly_detection:
+    zscore_threshold: 2.0  # Min z-score to flag anomaly
+    volume_rank_threshold: 0.7  # Min volume percentile
+    lookback_window: 60  # Days for zscore calculation
+
+  trend_confirmation:
+    window: 20  # Days for trend calculation
+    threshold: 0.05  # Min trend strength
+
+# =================================
+# Analist-2: News/Macro/LLM
+# =================================
+analist_2:
+  enabled: true
+  weight: 1.2  # Slightly higher weight
+
+  news_analysis:
+    sentiment_threshold: 0.3  # Min abs(sentiment) to affect signal
+    max_age_days: 3
+
+  macro_analysis:
+    event_impact_weights:
+      HIGH: 1.0
+      MEDIUM: 0.5
+      LOW: 0.2
+    max_age_days: 7
+
+  llm_config:
+    model: "deepseek-chat"
+    temperature: 0.7
+    max_tokens: 500
+    timeout_seconds: 10
+
+# =================================
+# Analist-3: Regime/DSI Risk
+# =================================
+analist_3:
+  enabled: true
+  weight: 0.8  # Conservative weight
+
+  regime_analysis:
+    volatility_window: 30
+    trend_window: 60
+    structural_break_penalty: -0.4  # Risk score penalty for breaks
+
+  dsi_analysis:
+    contrarian_mode: true  # Low DSI = bullish opportunity
+    extreme_fear_threshold: 0.3
+    extreme_greed_threshold: 0.7
+
+  position_sizing:
+    base_multiplier: 1.0
+    risk_on_multiplier: 1.5
+    risk_off_multiplier: 0.5
+    min_multiplier: 0.25
+    max_multiplier: 2.0
+
+# =================================
+# Ensemble Logic
+# =================================
+ensemble:
+  enabled: true
+  combination_method: "weighted_voting"  # or "average", "median"
+
+  disagreement_penalty:
+    enabled: true
+    threshold: 0.5  # High disagreement threshold
+    penalty_factor: 0.5  # Reduce confidence by 50%
+
+  uncertainty_calculation:
+    base_source: "disagreement"
+    missing_analyst_penalty: 0.15  # +15% uncertainty per missing analyst
+
+  min_analysts_required: 2  # Need at least 2 analysts for decision
+
+# =================================
+# Risk Management
+# =================================
+risk_management:
+  position_sizing:
+    method: "fixed_risk"  # or "volatility_scaled", "kelly"
+    risk_per_trade_pct: 1.0  # 1% of portfolio per trade
+    max_position_size_pct: 10.0  # Max 10% in single position
+
+  stop_loss:
+    enabled: true
+    type: "percentage"  # or "atr", "volatility_scaled"
+    percentage: 5.0  # 5% stop-loss
+    use_trailing: false
+    trailing_distance_pct: 3.0
+
+  take_profit:
+    enabled: true
+    type: "percentage"
+    percentage: 10.0  # 10% take-profit
+
+  volatility_scaling:
+    enabled: false  # Set to true for VolatilityScaledRisk
+    reference_vol: 0.02  # 2% daily volatility
+    multiplier: 1.5
+
+# =================================
+# Portfolio Constraints
+# =================================
+portfolio_constraints:
+  turnover_limits:
+    max_daily_trades: 10
+    max_daily_notional: 50000.0
+
+  cooldown:
+    enabled: true
+    hours_after_flip: 24  # Wait 24h after BUY→SELL flip
+
+  correlation_netting:
+    enabled: true
+    max_correlated_exposure_pct: 50.0  # Max 50% in correlated assets
+
+  max_open_positions: 5
+
+# =================================
+# Execution
+# =================================
+execution:
+  mode: "paper"  # or "live", "shadow"
+
+  initial_capital: 100000.0
+
+  slippage:
+    model: "fixed_percentage"
+    percentage: 0.1  # 0.1% slippage
+
+  commission:
+    model: "fixed_percentage"
+    percentage: 0.1  # 0.1% commission
+
+# =================================
+# Backtest Settings
+# =================================
+backtest:
+  date_ranges:
+    crypto:
+      start: "2017-01-01"
+      end: "2025-01-17"
+
+    traditional:
+      start: "2008-01-01"
+      end: "2025-01-17"
+
+  rebalance_frequency: "daily"
+
+  metrics:
+    - "total_return"
+    - "cagr"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "avg_win_loss_ratio"
+    - "profit_factor"
+
+  benchmark: "^GSPC"  # S&P 500 for comparison
+
+# =================================
+# Daemon Settings
+# =================================
+daemon:
+  mode: "once"  # or "loop"
+  interval_seconds: 900  # 15 minutes (for loop mode)
+
+  health_check:
+    enabled: true
+    lookback_hours: 24
+    min_success_rate: 0.9
+
+  snapshot:
+    enabled: true
+    frequency: "after_each_cycle"
+
+# =================================
+# Logging
+# =================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  outputs:
+    - type: "console"
+    - type: "file"
+      path: "logs/baseline_v1.log"
+      rotation: "daily"
+      retention_days: 30
