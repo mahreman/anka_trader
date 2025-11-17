@@ -364,3 +364,57 @@ class PortfolioSnapshot(Base):
     def __repr__(self) -> str:
         dd_str = f"{self.max_drawdown:.2%}" if self.max_drawdown else "N/A"
         return f"<PortfolioSnapshot(ts={self.timestamp}, equity=${self.equity:.2f}, dd={dd_str})>"
+
+
+class NewsArticle(Base):
+    """
+    News articles from various providers.
+    P2+ extension: Alternative data for Analist-2/3.
+    """
+
+    __tablename__ = "news_articles"
+    __table_args__ = (
+        Index("ix_news_published_at", "published_at"),
+        Index("ix_news_symbols", "symbols"),
+        Index("ix_news_provider", "provider"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(50), nullable=False)  # newsapi, alpha_vantage, etc.
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    url = Column(String(500), nullable=True, unique=True)  # Unique constraint on URL
+    published_at = Column(DateTime, nullable=False, index=True)
+    source_name = Column(String(100), nullable=True)
+    symbols = Column(String(200), nullable=True)  # Comma-separated symbols (e.g., "BTC,ETH")
+    sentiment_score = Column(Float, nullable=True)  # Optional: -1 to 1
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<NewsArticle(id={self.id}, title='{self.title[:50]}...', published_at={self.published_at})>"
+
+
+class MacroIndicator(Base):
+    """
+    Macroeconomic indicators (e.g., from FRED, World Bank).
+    P2+ extension: Alternative data for Analist-2/3.
+    """
+
+    __tablename__ = "macro_indicators"
+    __table_args__ = (
+        UniqueConstraint("series_id", "date", name="uq_macro_series_date"),
+        Index("ix_macro_series_date", "series_id", "date"),
+        Index("ix_macro_provider", "provider"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(50), nullable=False)  # fred, worldbank, etc.
+    series_id = Column(String(50), nullable=False, index=True)  # e.g., "DGS10", "CPIAUCSL"
+    series_name = Column(String(200), nullable=True)  # Human-readable name
+    date = Column(Date, nullable=False, index=True)
+    value = Column(Float, nullable=False)
+    units = Column(String(50), nullable=True)  # e.g., "Percent", "Index"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<MacroIndicator(series_id='{self.series_id}', date={self.date}, value={self.value})>"

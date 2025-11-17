@@ -1,0 +1,72 @@
+# Provider Configuration for Anka Trader
+#
+# This file configures data providers for price, news, and macro data.
+# Replace placeholder API keys with your actual credentials.
+
+# Price data configuration
+price:
+  primary: "binance"  # Primary provider: "binance" or "yfinance"
+  fallback: "yfinance"  # Fallback provider if primary fails
+
+  # Asset universes to track
+  universes:
+    crypto:
+      symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "ADAUSDT"]
+
+    fx:
+      symbols: ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDTRY=X"]
+
+    equity:
+      symbols: ["SPY", "QQQ", "DIA", "AAPL", "MSFT", "GOOGL", "TSLA"]
+
+# Binance API credentials
+# Get your API key from: https://www.binance.com/en/my/settings/api-management
+binance:
+  api_key: "YOUR_BINANCE_API_KEY"
+  api_secret: "YOUR_BINANCE_API_SECRET"
+  base_url: "https://api.binance.com"
+
+# YFinance configuration (no API key needed)
+yfinance:
+  session_args: {}
+
+# News data configuration
+news:
+  provider: "newsapi"
+
+  newsapi:
+    # Get your API key from: https://newsapi.org/register
+    api_key: "YOUR_NEWSAPI_KEY"
+
+    languages: ["en"]
+
+    # Tickers/keywords to track for news
+    tickers:
+      - "bitcoin"
+      - "ethereum"
+      - "cryptocurrency"
+      - "S&P 500"
+      - "stock market"
+      - "federal reserve"
+
+    # Maximum articles per ticker per ingestion
+    max_per_symbol: 50
+
+# Macroeconomic data configuration
+macro:
+  provider: "fred"
+
+  fred:
+    # Get your API key from: https://fred.stlouisfed.org/docs/api/api_key.html
+    api_key: "YOUR_FRED_API_KEY"
+
+    # FRED series to track
+    series:
+      - "DGS10"      # 10-Year Treasury Constant Maturity Rate
+      - "DGS2"       # 2-Year Treasury Constant Maturity Rate
+      - "CPIAUCSL"   # Consumer Price Index for All Urban Consumers
+      - "UNRATE"     # Unemployment Rate
+      - "GDP"        # Gross Domestic Product
+      - "FEDFUNDS"   # Federal Funds Effective Rate
+      - "DFF"        # Federal Funds Rate
+      - "DEXUSEU"    # US/Euro Foreign Exchange Rate
