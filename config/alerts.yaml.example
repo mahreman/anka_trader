@@ -1,0 +1,56 @@
+# Alerts Configuration Example
+# ==============================
+# Copy this to config/alerts.yaml and configure your notification channels
+
+# Email Notifications
+# --------------------
+email:
+  enabled: false  # Set to true to enable email alerts
+  
+  # SMTP Settings (example for Gmail)
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  
+  # Credentials
+  # For Gmail, use an App Password: https://support.google.com/accounts/answer/185833
+  username: "your@gmail.com"
+  password: "your_app_password_here"
+  
+  # Email addresses
+  from_addr: "your@gmail.com"
+  to_addrs:
+    - "your@email.com"
+    - "another@email.com"  # Can add multiple recipients
+
+# Telegram Notifications
+# -----------------------
+telegram:
+  enabled: false  # Set to true to enable Telegram alerts
+  
+  # Bot Token
+  # Get from @BotFather on Telegram
+  bot_token: "YOUR_BOT_TOKEN_HERE"
+  
+  # Chat ID
+  # Get your chat ID by:
+  # 1. Send a message to your bot
+  # 2. Visit: https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates
+  # 3. Look for "chat":{"id":123456789}
+  chat_id: "YOUR_CHAT_ID_HERE"
+
+# =============================
+# ALERT TYPES:
+# =============================
+# The system will send alerts for:
+# - Broker errors (API failures, connection issues)
+# - Kill-switch triggers (risk guardrails)
+# - Daemon stalls (hasn't run recently)
+# - Portfolio alerts (extreme drawdown)
+#
+# =============================
+# TESTING:
+# =============================
+# To test your configuration:
+# >>> from otonom_trader.alerts import Notifier
+# >>> n = Notifier("config/alerts.yaml")
+# >>> n.notify("Test Alert", "This is a test message")

@@ -1,14 +1,15 @@
 """
-Alert and monitoring system.
+Alert engine for sending notifications via email and Telegram.
 
-Provides health checks and alert notifications for portfolio monitoring.
+Supports:
+- Email notifications via SMTP
+- Telegram notifications via Bot API
+- Broker errors
+- Kill-switch triggers
+- Daemon health checks
 """
 
-from .engine import Alert, AlertLevel, check_alerts, send_alert
+from .notifier import Notifier
+from .engine import AlertEngine
 
-__all__ = [
-    "Alert",
-    "AlertLevel",
-    "check_alerts",
-    "send_alert",
-]
+__all__ = ["Notifier", "AlertEngine"]

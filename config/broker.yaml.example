@@ -1,0 +1,33 @@
+# Broker Configuration Example
+# =============================
+# Copy this to config/broker.yaml and fill in your credentials
+
+kind: binance
+
+# API Credentials
+# For Binance testnet, get keys from: https://testnet.binance.vision/
+api_key: "YOUR_API_KEY_HERE"
+api_secret: "YOUR_API_SECRET_HERE"
+
+# Binance Base URL
+# - Testnet: https://testnet.binance.vision
+# - Production: https://api.binance.com
+base_url: "https://testnet.binance.vision"
+
+# Testnet Mode
+# Set to true for testnet (paper trading with real API)
+# Set to false for production (REAL MONEY)
+testnet: true
+
+# Request Configuration
+recv_window: 5000  # Request time window (ms)
+timeout: 10  # HTTP timeout (seconds)
+
+# =============================
+# IMPORTANT NOTES:
+# =============================
+# 1. NEVER commit real API keys to git
+# 2. Add config/broker.yaml to .gitignore
+# 3. Start with testnet=true for testing
+# 4. Only use testnet=false when you're ready for real trading
+# 5. Keep your API secret secure - anyone with it can trade on your behalf
