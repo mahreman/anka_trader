@@ -1,0 +1,33 @@
+# RL Behavior Cloning Training Configuration
+
+# Dataset
+dataset_path: "data/offline_dataset.npz"  # Path to offline dataset
+
+# Output
+output_dir: "models/rl_bc"  # Output directory for models and metrics
+
+# Training hyperparameters
+batch_size: 256             # Training batch size
+lr: 0.001                   # Learning rate
+weight_decay: 0.00001       # L2 regularization weight (1e-5)
+max_epochs: 20              # Maximum training epochs
+val_ratio: 0.1              # Validation set ratio (10%)
+
+# Model architecture
+hidden_dim: 128             # Hidden layer dimension
+num_layers: 2               # Number of hidden layers
+dropout: 0.1                # Dropout probability
+
+# Loss weights
+action_weight: 1.0          # Weight for action classification loss
+strength_weight: 1.0        # Weight for strength regression loss
+
+# Other
+seed: 42                    # Random seed for reproducibility
+device: "cuda"              # Device (cuda/cpu)
+
+# Notes:
+# - For small datasets (< 10k samples): reduce hidden_dim to 64, num_layers to 1
+# - For large datasets (> 100k samples): increase hidden_dim to 256, num_layers to 3
+# - If overfitting: increase dropout to 0.2-0.3, add weight_decay
+# - If underfitting: reduce dropout to 0.05, increase hidden_dim
