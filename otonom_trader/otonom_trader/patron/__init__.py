@@ -10,6 +10,11 @@ from .ensemble import (
     apply_disagreement_penalty,
     get_analyst_weights,
 )
+from .rl_analyst_adapter import (
+    RlAnalyst,
+    RlAnalystConfig,
+    create_rl_analyst,
+)
 
 __all__ = [
     "make_decision_for_anomaly",
@@ -21,4 +26,7 @@ __all__ = [
     "combine_signals",
     "apply_disagreement_penalty",
     "get_analyst_weights",
+    "RlAnalyst",
+    "RlAnalystConfig",
+    "create_rl_analyst",
 ]
