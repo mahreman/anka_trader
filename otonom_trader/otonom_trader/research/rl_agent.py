@@ -29,30 +29,52 @@ class RlState:
     """
     RL agent state representation.
 
-    Encodes market state and portfolio state for RL agent input.
+    Encodes complete market and portfolio state for RL agent input.
 
     Attributes:
-        price_history: Recent price history (normalized)
-        technical_indicators: Technical indicator values
-        portfolio_state: Current position, cash, equity
-        regime: Market regime (0=low_vol, 1=high_vol, 2=crisis)
+        returns_history: Recent returns (normalized log returns)
+        technical_indicators: Technical indicator values (RSI, MACD, etc.)
+        portfolio_position: Current position size (-1 to 1)
+        portfolio_leverage: Current leverage ratio
+        portfolio_cash_pct: Cash as % of equity
+        days_since_trade: Days since last trade
+        regime: Market regime ID (0=low_vol, 1=high_vol, 2=crisis)
         dsi: Data health index (0-1)
+        news_sentiment: News sentiment score (-1 to +1)
+        macro_sentiment: Macro sentiment score (-1 to +1)
 
     Example:
         >>> state = RlState(
-        ...     price_history=np.array([1.0, 1.02, 1.01]),
+        ...     returns_history=np.array([0.01, -0.02, 0.015]),
         ...     technical_indicators={"rsi": 55.0, "macd": 0.5},
-        ...     portfolio_state={"position": 0.5, "cash": 50000},
+        ...     portfolio_position=0.5,
+        ...     portfolio_leverage=0.5,
+        ...     portfolio_cash_pct=0.5,
+        ...     days_since_trade=3,
         ...     regime=0,
-        ...     dsi=0.85
+        ...     dsi=0.85,
+        ...     news_sentiment=0.2,
+        ...     macro_sentiment=0.1
         ... )
     """
 
-    price_history: np.ndarray  # Shape: (lookback_window,)
+    # Market features
+    returns_history: np.ndarray  # Shape: (lookback_window,)
     technical_indicators: Dict[str, float]
-    portfolio_state: Dict[str, float]
-    regime: int
-    dsi: float
+
+    # Portfolio features
+    portfolio_position: float  # -1 (max short) to +1 (max long)
+    portfolio_leverage: float  # Current leverage ratio
+    portfolio_cash_pct: float  # Cash as % of equity
+    days_since_trade: int  # Days since last trade
+
+    # Market regime and data quality
+    regime: int  # Regime ID
+    dsi: float  # Data health score
+
+    # Sentiment features
+    news_sentiment: float  # -1 (bearish) to +1 (bullish)
+    macro_sentiment: float  # -1 (bearish) to +1 (bullish)
 
     def to_vector(self) -> np.ndarray:
         """
@@ -60,31 +82,47 @@ class RlState:
 
         Returns:
             Flattened feature vector
+
+        Example:
+            >>> state = RlState(...)
+            >>> vector = state.to_vector()
+            >>> print(vector.shape)  # (30,) for lookback_window=20
         """
         # Flatten all components into single vector
         features = []
 
-        # Price history (already array)
-        features.extend(self.price_history.tolist())
+        # Returns history (already array)
+        features.extend(self.returns_history.tolist())
 
-        # Technical indicators
+        # Technical indicators (fixed order)
         features.extend([
-            self.technical_indicators.get("rsi", 0.0),
+            self.technical_indicators.get("rsi", 0.0) / 100.0,  # Normalize to [0,1]
             self.technical_indicators.get("macd", 0.0),
             self.technical_indicators.get("bb_width", 0.0),
+            self.technical_indicators.get("volume_ratio", 1.0),
         ])
 
-        # Portfolio state
+        # Portfolio features
         features.extend([
-            self.portfolio_state.get("position", 0.0),
-            self.portfolio_state.get("cash", 0.0) / 100000,  # Normalize
-            self.portfolio_state.get("equity", 0.0) / 100000,
+            self.portfolio_position,  # Already [-1, 1]
+            self.portfolio_leverage,
+            self.portfolio_cash_pct,
+            np.tanh(self.days_since_trade / 30.0),  # Normalize with tanh
         ])
 
-        # Regime and DSI
+        # Regime (one-hot encoding for 3 regimes)
+        regime_one_hot = [0.0, 0.0, 0.0]
+        if 0 <= self.regime < 3:
+            regime_one_hot[self.regime] = 1.0
+        features.extend(regime_one_hot)
+
+        # Data quality
+        features.append(self.dsi)
+
+        # Sentiment
         features.extend([
-            float(self.regime),
-            self.dsi,
+            self.news_sentiment,  # Already [-1, 1]
+            self.macro_sentiment,  # Already [-1, 1]
         ])
 
         return np.array(features, dtype=np.float32)
