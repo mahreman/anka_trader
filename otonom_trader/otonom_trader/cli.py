@@ -47,6 +47,10 @@ app.add_typer(experiments_app, name="experiments")
 from .cli_rl import app as rl_app
 app.add_typer(rl_app, name="rl")
 
+# Add research sub-command
+from .cli_research import app as research_app
+app.add_typer(research_app, name="research")
+
 
 def version_callback(value: bool):
     """Print version and exit."""
