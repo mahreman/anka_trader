@@ -13,6 +13,10 @@ from .schema import (
     Hypothesis,
     HypothesisResult,
 )
+from .schema_experiments import (
+    Experiment,
+    ExperimentRun,
+)
 
 __all__ = [
     "get_engine",
@@ -27,4 +31,6 @@ __all__ = [
     "DsiORM",
     "Hypothesis",
     "HypothesisResult",
+    "Experiment",
+    "ExperimentRun",
 ]
