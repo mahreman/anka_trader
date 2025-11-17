@@ -177,13 +177,14 @@ def make_ensemble_decision_for_anomaly(
     persist: bool = True,
 ) -> DecisionDomain:
     """
-    Generate trading decision using ensemble of analysts (P1 feature).
+    Generate trading decision using ensemble of analysts (P2 feature).
 
     This is an enhanced version of make_decision_for_anomaly that:
-    1. Gets signal from technical analyst (existing rules)
-    2. Gets signal from other analysts (news, macro - stub for P1)
-    3. Combines them using weighted ensemble
-    4. Applies disagreement penalty
+    1. Gets signal from Analist-1 (technical analyst - existing rules)
+    2. Gets signal from Analist-2 (news/macro + LLM)
+    3. Gets signal from Analist-3 (regime/DSI context)
+    4. Combines them using weighted ensemble
+    5. Applies disagreement penalty
 
     Args:
         session: Database session
@@ -199,7 +200,17 @@ def make_ensemble_decision_for_anomaly(
         >>> decision = make_ensemble_decision_for_anomaly(session, anomaly, use_ensemble=True)
         >>> # Confidence adjusted based on analyst disagreement
     """
+    import json
     from .ensemble import AnalystSignal, combine_signals, apply_disagreement_penalty
+    from ..analytics import (
+        get_recent_news,
+        aggregate_sentiment,
+        get_recent_events,
+        compute_macro_bias,
+        get_llm_signal_with_fallback,
+        resolve_regime,
+        resolve_dsi,
+    )
 
     # Get basic technical analysis (existing rules)
     base_decision = make_decision_for_anomaly(session, anomaly, persist=False)
@@ -221,10 +232,13 @@ def make_ensemble_decision_for_anomaly(
                 session.commit()
         return base_decision
 
-    # P1: Build ensemble of analysts
+    # Build ensemble of analysts
     signals = []
+    analyst_details = []
 
-    # Technical analyst (from existing rules)
+    # ============================================================
+    # Analist-1: Technical (from existing rules)
+    # ============================================================
     tech_direction = base_decision.signal.value
     # Approximate p_up from signal and confidence
     if tech_direction == "BUY":
@@ -236,19 +250,171 @@ def make_ensemble_decision_for_anomaly(
 
     signals.append(
         AnalystSignal(
-            name="Technical",
+            name="Analist-1 (Technical)",
             direction=tech_direction,
             p_up=tech_p_up,
             confidence=base_decision.confidence,
             weight=1.0,
         )
     )
+    analyst_details.append({
+        "name": "Analist-1 (Technical)",
+        "direction": tech_direction,
+        "p_up": tech_p_up,
+        "confidence": base_decision.confidence,
+    })
 
-    # TODO P2: Add news analyst
-    # TODO P2: Add macro analyst
-    # For now, we only have technical, so ensemble just wraps it
+    # ============================================================
+    # Analist-2: News/Macro + LLM
+    # ============================================================
+    try:
+        # Get recent news (last 3 days)
+        news_items = get_recent_news(anomaly.asset_symbol, days_back=3)
+        news_sentiment = aggregate_sentiment(news_items) if news_items else 0.0
+        news_summary = f"3-day sentiment: {news_sentiment:.2f}"
+        if news_items:
+            top_headlines = [n.headline for n in news_items[:3]]
+            news_summary += f" | Top: {'; '.join(top_headlines[:2])}"
 
+        # Get recent macro events (last 7 days)
+        macro_events = get_recent_events(days_back=7, region="US")
+        macro_bias = compute_macro_bias(macro_events) if macro_events else 0.0
+        macro_summary = f"7-day macro bias: {macro_bias:.2f}"
+        if macro_events:
+            key_events = [e.event_name for e in macro_events[:3]]
+            macro_summary += f" | Key: {'; '.join(key_events[:2])}"
+
+        # Build anomaly context
+        anomaly_context = (
+            f"{anomaly.anomaly_type.value} detected on {anomaly.date}, "
+            f"zscore={anomaly.zscore:.2f}, volume_rank={anomaly.volume_rank:.2f}"
+        )
+
+        # Get regime/DSI context for Analist-3 input
+        regime_data = resolve_regime(session, anomaly.asset_symbol, anomaly.date)
+        dsi_data = resolve_dsi(session, anomaly.asset_symbol, anomaly.date)
+        regime_context = ""
+        if regime_data:
+            regime_id, vol, trend, is_break = regime_data
+            regime_context = f"Regime: {regime_id}, Vol: {vol:.4f}, Trend: {trend:.4f}"
+            if is_break:
+                regime_context += " (structural break!)"
+        if dsi_data:
+            dsi_score, _, _, _ = dsi_data
+            regime_context += f" | DSI: {dsi_score:.2f}"
+
+        # Call LLM
+        llm_signal = get_llm_signal_with_fallback(
+            symbol=anomaly.asset_symbol,
+            anomaly_context=anomaly_context,
+            news_summary=news_summary,
+            macro_summary=macro_summary,
+            regime_context=regime_context,
+        )
+
+        signals.append(
+            AnalystSignal(
+                name="Analist-2 (News/Macro/LLM)",
+                direction=llm_signal.direction,
+                p_up=llm_signal.p_up,
+                confidence=llm_signal.confidence,
+                weight=1.2,  # Slightly higher weight for LLM
+            )
+        )
+        analyst_details.append({
+            "name": "Analist-2 (News/Macro/LLM)",
+            "direction": llm_signal.direction,
+            "p_up": llm_signal.p_up,
+            "confidence": llm_signal.confidence,
+            "reasoning": llm_signal.reasoning,
+        })
+
+    except Exception as e:
+        logger.warning(f"Analist-2 (LLM) failed: {e}")
+        # Continue without LLM signal
+
+    # ============================================================
+    # Analist-3: Regime/DSI adjustment
+    # ============================================================
+    try:
+        regime_data = resolve_regime(session, anomaly.asset_symbol, anomaly.date)
+        dsi_data = resolve_dsi(session, anomaly.asset_symbol, anomaly.date)
+
+        # Simple heuristic for regime-based signal
+        # Low vol regime + BUY signal -> more confidence
+        # High vol regime + any signal -> less confidence
+        # Structural break -> HOLD bias
+
+        regime_direction = "HOLD"
+        regime_confidence = 0.5
+        regime_p_up = 0.5
+
+        if regime_data:
+            regime_id, vol, trend, is_break = regime_data
+
+            if is_break:
+                # Structural break -> caution
+                regime_direction = "HOLD"
+                regime_confidence = 0.4
+                regime_p_up = 0.5
+            elif regime_id == 0:  # Low vol
+                # Low vol + uptrend -> bullish
+                if trend > 0:
+                    regime_direction = "BUY"
+                    regime_confidence = 0.6
+                    regime_p_up = 0.6
+                else:
+                    regime_direction = "HOLD"
+                    regime_confidence = 0.5
+                    regime_p_up = 0.5
+            elif regime_id == 2:  # High vol
+                # High vol -> caution
+                regime_direction = "HOLD"
+                regime_confidence = 0.4
+                regime_p_up = 0.5
+            else:  # Normal vol
+                if trend > 0:
+                    regime_direction = "BUY"
+                    regime_confidence = 0.55
+                    regime_p_up = 0.55
+                elif trend < 0:
+                    regime_direction = "SELL"
+                    regime_confidence = 0.55
+                    regime_p_up = 0.45
+                else:
+                    regime_direction = "HOLD"
+                    regime_confidence = 0.5
+                    regime_p_up = 0.5
+
+        # DSI penalty: low DSI -> reduce confidence
+        if dsi_data:
+            dsi_score, _, _, _ = dsi_data
+            if dsi_score < 0.5:
+                regime_confidence *= 0.8  # 20% penalty for low DSI
+
+        signals.append(
+            AnalystSignal(
+                name="Analist-3 (Regime/DSI)",
+                direction=regime_direction,
+                p_up=regime_p_up,
+                confidence=regime_confidence,
+                weight=0.8,  # Lower weight for heuristic
+            )
+        )
+        analyst_details.append({
+            "name": "Analist-3 (Regime/DSI)",
+            "direction": regime_direction,
+            "p_up": regime_p_up,
+            "confidence": regime_confidence,
+        })
+
+    except Exception as e:
+        logger.warning(f"Analist-3 (Regime/DSI) failed: {e}")
+        # Continue without regime signal
+
+    # ============================================================
     # Combine signals
+    # ============================================================
     ensemble = combine_signals(signals)
 
     # Apply disagreement penalty
@@ -258,18 +424,30 @@ def make_ensemble_decision_for_anomaly(
         threshold=0.5,
     )
 
+    # Convert ensemble direction to SignalType
+    if ensemble.direction == "BUY":
+        final_signal = SignalType.BUY
+    elif ensemble.direction == "SELL":
+        final_signal = SignalType.SELL
+    else:
+        final_signal = SignalType.HOLD
+
     # Create enhanced decision
     enhanced_reason = (
         base_decision.reason
-        + f"\n[Ensemble: p_up={ensemble.p_up:.2f}, disagreement={ensemble.disagreement:.2f}]"
+        + f"\n[Ensemble: direction={ensemble.direction}, p_up={ensemble.p_up:.2f}, "
+        f"disagreement={ensemble.disagreement:.2f}, adjusted_confidence={adjusted_confidence:.2f}]"
     )
 
     decision = DecisionDomain(
         asset_symbol=anomaly.asset_symbol,
         date=anomaly.date,
-        signal=base_decision.signal,  # Keep same signal
+        signal=final_signal,  # Use ensemble direction
         confidence=adjusted_confidence,  # Adjusted by disagreement
         reason=enhanced_reason,
+        p_up=ensemble.p_up,
+        disagreement=ensemble.disagreement,
+        analyst_signals=json.dumps(analyst_details),
     )
 
     # Persist
@@ -282,6 +460,9 @@ def make_ensemble_decision_for_anomaly(
                 signal=str(decision.signal),
                 confidence=decision.confidence,
                 reason=decision.reason,
+                p_up=decision.p_up,
+                disagreement=decision.disagreement,
+                analyst_signals=decision.analyst_signals,
             )
             session.add(decision_orm)
             session.commit()
