@@ -1,0 +1,86 @@
+# Broker Configuration
+#
+# Supported broker types:
+#   - dummy: Shadow mode, no real orders (default)
+#   - binance: Binance Spot (testnet or live)
+#   - alpaca: Alpaca Markets (paper or live)
+#   - ibkr: Interactive Brokers (paper or live)
+
+broker:
+  # Broker type: dummy, binance, alpaca, ibkr
+  type: dummy
+
+  # Shadow mode: if true, log orders but don't execute (works with real brokers)
+  shadow_mode: true
+
+  # Binance configuration (when type=binance)
+  binance:
+    # Use testnet for testing (testnet.binance.vision)
+    use_testnet: true
+
+    # API credentials (NEVER commit real keys!)
+    api_key: ""
+    api_secret: ""
+
+    # API endpoints (override for testnet)
+    base_url: "https://testnet.binance.vision"
+
+    # Order defaults
+    default_order_type: "LIMIT"  # MARKET or LIMIT
+
+    # Rate limiting
+    max_requests_per_minute: 1200
+    max_orders_per_second: 10
+
+  # Alpaca configuration (when type=alpaca)
+  alpaca:
+    use_paper: true
+    api_key: ""
+    api_secret: ""
+    base_url: "https://paper-api.alpaca.markets"
+
+  # IBKR configuration (when type=ibkr)
+  ibkr:
+    use_paper: true
+    account_id: ""
+    host: "127.0.0.1"
+    port: 7497  # 7497=paper, 7496=live
+
+# Risk Guardrails
+risk_guardrails:
+  # Maximum notional per order (USD)
+  max_notional_per_order: 10000.0
+
+  # Maximum open risk as % of equity
+  max_open_risk_pct: 25.0
+
+  # Maximum total positions
+  max_total_positions: 10
+
+  # Maximum position size per symbol (% of equity)
+  max_position_size_pct: 10.0
+
+  # Symbol blacklist (never trade these)
+  symbol_blacklist:
+    - "LUNA-USD"
+    - "FTT-USD"
+
+  # Require confirmation for large orders (USD)
+  require_confirmation_above: 50000.0
+
+  # Kill switch: halt all trading if true
+  kill_switch: false
+
+# Logging and monitoring
+logging:
+  # Log all orders (shadow and real)
+  log_all_orders: true
+
+  # Log latency metrics
+  log_latency: true
+
+  # Alert on high slippage (%)
+  alert_slippage_threshold: 2.0
+
+  # Alert on order rejection
+  alert_on_rejection: true
