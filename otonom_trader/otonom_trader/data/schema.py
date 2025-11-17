@@ -37,6 +37,7 @@ class Symbol(Base):
     daily_bars = relationship("DailyBar", back_populates="symbol_obj", cascade="all, delete-orphan")
     anomalies = relationship("Anomaly", back_populates="symbol_obj", cascade="all, delete-orphan")
     decisions = relationship("Decision", back_populates="symbol_obj", cascade="all, delete-orphan")
+    regimes = relationship("Regime", back_populates="symbol_obj", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Symbol(id={self.id}, symbol='{self.symbol}', name='{self.name}')>"
@@ -123,3 +124,32 @@ class Decision(Base):
 
     def __repr__(self) -> str:
         return f"<Decision(symbol_id={self.symbol_id}, date={self.date}, signal={self.signal})>"
+
+
+class Regime(Base):
+    """
+    Market regime classifications for each symbol and date.
+    P1 extension: Analist-1 regime detection.
+    """
+
+    __tablename__ = "regimes"
+    __table_args__ = (
+        UniqueConstraint("symbol_id", "date", name="uq_regime_symbol_date"),
+        Index("ix_regimes_symbol_date", "symbol_id", "date"),
+        Index("ix_regimes_regime_id", "regime_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+    date = Column(Date, nullable=False, index=True)
+    regime_id = Column(Integer, nullable=False)  # 0, 1, 2 for low/normal/high vol
+    volatility = Column(Float, nullable=False)  # Rolling volatility
+    trend = Column(Float, nullable=False)  # Rolling trend
+    is_structural_break = Column(Integer, nullable=False, default=0)  # Boolean as int
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    symbol_obj = relationship("Symbol", back_populates="regimes")
+
+    def __repr__(self) -> str:
+        return f"<Regime(symbol_id={self.symbol_id}, date={self.date}, regime_id={self.regime_id})>"

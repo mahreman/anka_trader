@@ -359,11 +359,160 @@ def show_decisions(
 
 
 @app.command()
+def detect_regimes(
+    symbol: Optional[str] = typer.Option(
+        None, "--symbol", help="Specific symbol (default: all P0 assets)"
+    ),
+    vol_window: int = typer.Option(20, "--vol-window", help="Volatility window (days)"),
+    trend_window: int = typer.Option(20, "--trend-window", help="Trend window (days)"),
+    k_regimes: int = typer.Option(3, "--k-regimes", help="Number of regime clusters"),
+    cusum_threshold: float = typer.Option(
+        3.0, "--cusum-threshold", help="CUSUM threshold for structural breaks"
+    ),
+):
+    """
+    Detect market regimes and structural breaks (P1 feature).
+
+    Uses K-means clustering on rolling volatility to classify regimes
+    and CUSUM to detect structural breaks.
+
+    Examples:
+        otonom-trader detect-regimes
+        otonom-trader detect-regimes --symbol BTC-USD
+        otonom-trader detect-regimes --k-regimes 4 --cusum-threshold 4.0
+    """
+    try:
+        from .analytics.regime import (
+            compute_regimes_for_symbol,
+            compute_regimes_all_symbols,
+            persist_regimes,
+        )
+
+        typer.echo(
+            f"Detecting regimes (vol_window={vol_window}, trend_window={trend_window}, "
+            f"k={k_regimes}, cusum_threshold={cusum_threshold})"
+        )
+
+        with next(get_session()) as session:
+            if symbol:
+                # Single symbol
+                regimes = compute_regimes_for_symbol(
+                    session,
+                    symbol=symbol,
+                    vol_window=vol_window,
+                    trend_window=trend_window,
+                    k_regimes=k_regimes,
+                    cusum_threshold=cusum_threshold,
+                )
+                persist_regimes(session, regimes)
+
+                # Count structural breaks
+                breaks = sum(1 for r in regimes if r.is_structural_break)
+                typer.echo(f"\n{symbol}:")
+                typer.echo(f"  Total regime points: {len(regimes)}")
+                typer.echo(f"  Structural breaks:   {breaks}")
+
+            else:
+                # All symbols
+                assets = get_p0_assets()
+                symbols = [a.symbol for a in assets]
+
+                results = compute_regimes_all_symbols(
+                    session,
+                    symbols=symbols,
+                    vol_window=vol_window,
+                    trend_window=trend_window,
+                    k_regimes=k_regimes,
+                    cusum_threshold=cusum_threshold,
+                )
+
+                # Persist all
+                total_points = 0
+                total_breaks = 0
+
+                typer.echo("\nResults:")
+                for sym, regimes in results.items():
+                    if regimes:
+                        persist_regimes(session, regimes)
+                        breaks = sum(1 for r in regimes if r.is_structural_break)
+                        total_points += len(regimes)
+                        total_breaks += breaks
+                        typer.echo(
+                            f"  {sym:>10}: {len(regimes):>4} points, {breaks:>3} breaks"
+                        )
+                    else:
+                        typer.echo(f"  {sym:>10}: No data")
+
+                typer.echo(f"\nTotal: {total_points} regime points, {total_breaks} structural breaks")
+
+    except Exception as e:
+        typer.echo(f"✗ Error detecting regimes: {e}", err=True)
+        logger.exception("Regime detection failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def list_regimes(
+    symbol: Optional[str] = typer.Option(None, "--symbol", help="Filter by symbol"),
+    limit: int = typer.Option(20, "--limit", help="Maximum number to display"),
+    breaks_only: bool = typer.Option(
+        False, "--breaks-only", help="Show only structural breaks"
+    ),
+):
+    """
+    List detected regimes (P1 feature).
+
+    Examples:
+        otonom-trader list-regimes
+        otonom-trader list-regimes --symbol BTC-USD --limit 10
+        otonom-trader list-regimes --breaks-only
+    """
+    try:
+        from .data.schema import Regime as RegimeORM
+
+        with next(get_session()) as session:
+            query = session.query(RegimeORM, Symbol.symbol).join(Symbol)
+
+            if symbol:
+                query = query.filter(Symbol.symbol == symbol)
+
+            if breaks_only:
+                query = query.filter(RegimeORM.is_structural_break == 1)
+
+            query = query.order_by(RegimeORM.date.desc()).limit(limit)
+            results = query.all()
+
+        if not results:
+            typer.echo("No regimes found")
+            return
+
+        # Display
+        typer.echo("Date       | Symbol     | Regime | Volatility | Trend    | Break")
+        typer.echo("-" * 75)
+
+        for r, sym in results:
+            break_marker = "⚠" if r.is_structural_break else " "
+            typer.echo(
+                f"{r.date} | {sym:>10} | {r.regime_id:>6} | "
+                f"{r.volatility:>10.6f} | {r.trend:>+8.6f} | {break_marker}"
+            )
+
+        typer.echo(f"\nShowing {len(results)} regime points")
+
+    except Exception as e:
+        typer.echo(f"✗ Error listing regimes: {e}", err=True)
+        logger.exception("List regimes failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def status():
     """
     Show database status and statistics.
     """
     try:
+        from .data.schema import Regime as RegimeORM
+
         with next(get_session()) as session:
             # Count symbols
             symbol_count = session.query(Symbol).count()
@@ -379,12 +528,16 @@ def status():
             # Count decisions
             decision_count = session.query(DecisionORM).count()
 
+            # Count regimes (P1)
+            regime_count = session.query(RegimeORM).count()
+
             typer.echo("Database Status")
             typer.echo("=" * 40)
             typer.echo(f"Symbols:   {symbol_count:>6}")
             typer.echo(f"Bars:      {bar_count:>6}")
             typer.echo(f"Anomalies: {anomaly_count:>6}")
             typer.echo(f"Decisions: {decision_count:>6}")
+            typer.echo(f"Regimes:   {regime_count:>6}  [P1]")
 
     except Exception as e:
         typer.echo(f"✗ Error getting status: {e}", err=True)
