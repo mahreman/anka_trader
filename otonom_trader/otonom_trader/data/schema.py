@@ -248,3 +248,78 @@ class HypothesisResult(Base):
 
     def __repr__(self) -> str:
         return f"<HypothesisResult(id={self.id}, hypothesis_id={self.hypothesis_id}, pnl={self.pnl:.2f})>"
+
+
+class PaperTrade(Base):
+    """
+    Paper trading execution log.
+    P3 preparation: Records all simulated trades by the daemon.
+    """
+
+    __tablename__ = "paper_trades"
+    __table_args__ = (
+        Index("ix_paper_trades_timestamp", "timestamp"),
+        Index("ix_paper_trades_symbol", "symbol_id"),
+        Index("ix_paper_trades_decision", "decision_id"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+    decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True)
+
+    # Trade details
+    action = Column(String(10), nullable=False)  # BUY, SELL, HOLD
+    price = Column(Float, nullable=False)  # Execution price
+    quantity = Column(Float, nullable=False)  # Number of shares/units
+    value = Column(Float, nullable=False)  # Total value (price * quantity)
+
+    # Portfolio state after trade
+    portfolio_value = Column(Float, nullable=False)  # Total portfolio value
+    cash = Column(Float, nullable=False)  # Cash balance
+
+    # Metadata
+    notes = Column(Text, nullable=True)  # Optional notes
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    symbol_obj = relationship("Symbol")
+    decision_obj = relationship("Decision")
+
+    def __repr__(self) -> str:
+        return f"<PaperTrade(id={self.id}, action={self.action}, symbol_id={self.symbol_id}, value={self.value:.2f})>"
+
+
+class DaemonRun(Base):
+    """
+    Daemon execution log.
+    P3 preparation: Tracks each daemon cycle.
+    """
+
+    __tablename__ = "daemon_runs"
+    __table_args__ = (
+        Index("ix_daemon_runs_timestamp", "timestamp"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    # Pipeline stats
+    bars_ingested = Column(Integer, nullable=False, default=0)
+    anomalies_detected = Column(Integer, nullable=False, default=0)
+    decisions_made = Column(Integer, nullable=False, default=0)
+    trades_executed = Column(Integer, nullable=False, default=0)
+
+    # Portfolio snapshot
+    portfolio_value = Column(Float, nullable=True)
+    cash = Column(Float, nullable=True)
+
+    # Status
+    status = Column(String(20), nullable=False)  # SUCCESS, PARTIAL, FAILED
+    error_message = Column(Text, nullable=True)
+    duration_seconds = Column(Float, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<DaemonRun(id={self.id}, timestamp={self.timestamp}, status={self.status})>"
