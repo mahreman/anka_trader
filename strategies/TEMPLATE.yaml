@@ -1,0 +1,73 @@
+---
+# ============================================================================
+# MINIMAL STRATEGY TEMPLATE
+# ============================================================================
+# Bu template'i kopyalayıp yeni stratejiler oluşturabilirsiniz.
+# Tüm alanlar ZORUNLU değildir - defaults kullanılır.
+
+# ---------------------------------------------------------------------------
+# METADATA (Zorunlu)
+# ---------------------------------------------------------------------------
+name: "my_strategy"           # Strateji adı (zorunlu)
+description: "Strategy açıklaması"
+version: "1.0.0"
+
+# ---------------------------------------------------------------------------
+# UNIVERSE: Hangi sembolleri trade edeceğiz? (Zorunlu)
+# ---------------------------------------------------------------------------
+universe:
+  symbols:
+    - "BTC-USD"
+    - "ETH-USD"
+  universe_tags: []            # Opsiyonel: ["crypto", "fx", "equity"]
+
+# ---------------------------------------------------------------------------
+# RISK: Risk yönetimi (Defaults: risk_pct=1.0, stop_loss=5.0, take_profit=10.0)
+# ---------------------------------------------------------------------------
+risk:
+  risk_pct: 1.0              # Equity'nin % kaçı risk edilecek (0-10 arası)
+  stop_loss_pct: 5.0         # Stop-loss % (0-50 arası)
+  take_profit_pct: 10.0      # Take-profit %
+  max_drawdown_pct: null     # Opsiyonel alarm seviyesi
+
+# ---------------------------------------------------------------------------
+# FILTERS: Signal filtreleme (Hepsi opsiyonel)
+# ---------------------------------------------------------------------------
+filters:
+  dsi_threshold: null        # DSI threshold (örn: 0.3)
+  regime_vol_min: null       # Min volatility
+  regime_vol_max: null       # Max volatility
+  min_volume: null           # Min volume
+  min_price: null            # Min price
+
+# ---------------------------------------------------------------------------
+# ENSEMBLE: Analist weight'leri (Defaults: hepsi 1.0)
+# ---------------------------------------------------------------------------
+ensemble:
+  analyst_weights:
+    tech: 1.0                # Technical analist
+    news: 1.0                # News/Macro/LLM analist
+    risk: 1.0                # Regime/Risk analist
+    rl: 0.0                  # RL agent (disabled)
+
+  disagreement_threshold: null  # Opsiyonel
+
+# ---------------------------------------------------------------------------
+# EXECUTION: Execution parametreleri (Defaults: bar_type=D1, slippage=0.1, max_trades=10)
+# ---------------------------------------------------------------------------
+execution:
+  bar_type: "D1"             # Bar tipi: D1, M15, H1, etc.
+  slippage_pct: 0.1          # Slippage %
+  max_trades_per_day: 10     # Günlük max trade sayısı
+
+# ---------------------------------------------------------------------------
+# DİĞER AYARLAR (Detaylı config için baseline_v2.yaml'a bakın)
+# ---------------------------------------------------------------------------
+
+data_sources:
+  price_data:
+    provider: "yfinance"
+    frequency: "daily"
+    lookback_days: 365
+
+# ... daha fazla detay için baseline_v2.yaml'a bakın ...

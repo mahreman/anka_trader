@@ -1,0 +1,273 @@
+---
+# ============================================================================
+# Baseline v2 Strategy Configuration - STANDARDIZED SCHEMA
+# ============================================================================
+# This version uses the new standardized configuration contract.
+# All strategies should follow this schema for consistency.
+
+# ---------------------------------------------------------------------------
+# METADATA
+# ---------------------------------------------------------------------------
+name: "baseline_v2"
+description: "Multi-analyst ensemble strategy - standardized config"
+version: "2.0.0"
+created: "2025-01-17"
+
+# ---------------------------------------------------------------------------
+# UNIVERSE: Hangi sembolleri trade edeceğiz?
+# ---------------------------------------------------------------------------
+universe:
+  symbols:
+    - "BTC-USD"
+    - "ETH-USD"
+    - "GC=F"     # Gold futures
+    - "^GSPC"    # S&P 500
+  universe_tags:
+    - "crypto"
+    - "traditional"
+
+# ---------------------------------------------------------------------------
+# RISK: Risk yönetimi parametreleri
+# ---------------------------------------------------------------------------
+risk:
+  risk_pct: 1.0              # Equity'nin %1'i her trade'de
+  stop_loss_pct: 5.0         # %5 stop-loss
+  take_profit_pct: 10.0      # %10 take-profit
+  max_drawdown_pct: 20.0     # Alarm seviyesi (opsiyonel)
+
+# ---------------------------------------------------------------------------
+# FILTERS: Signal filtreleme kriterleri
+# ---------------------------------------------------------------------------
+filters:
+  dsi_threshold: 0.3         # DSI < 0.3 = extreme fear (contrarian BUY)
+  regime_vol_min: null       # Minimum volatility (null = yok)
+  regime_vol_max: null       # Maximum volatility (null = yok)
+  min_volume: null           # Minimum volume filter (null = yok)
+  min_price: null            # Minimum price filter (null = yok)
+
+# ---------------------------------------------------------------------------
+# ENSEMBLE: Analist weight'leri
+# ---------------------------------------------------------------------------
+ensemble:
+  analyst_weights:
+    tech: 1.0                # Analist-1: Technical anomaly
+    news: 1.2                # Analist-2: News/Macro/LLM
+    risk: 0.8                # Analist-3: Regime/DSI
+    rl: 0.0                  # RL agent (disabled for baseline)
+
+  disagreement_threshold: 0.5  # Yüksek disagreement → HOLD
+
+# ---------------------------------------------------------------------------
+# EXECUTION: Execution parametreleri
+# ---------------------------------------------------------------------------
+execution:
+  bar_type: "D1"             # Daily bars (D1, M15, H1, etc.)
+  slippage_pct: 0.1          # %0.1 slippage varsayımı
+  max_trades_per_day: 10     # Günlük max 10 trade
+
+# ---------------------------------------------------------------------------
+# DETAYLI AYARLAR (backward compatibility için tutuyoruz)
+# ---------------------------------------------------------------------------
+
+# Data Sources
+data_sources:
+  price_data:
+    provider: "yfinance"
+    frequency: "daily"
+    lookback_days: 365
+
+  news_data:
+    enabled: true
+    source_type: "csv"
+    lookback_days: 3
+
+  macro_calendar:
+    enabled: true
+    source_type: "csv"
+    lookback_days: 7
+    region: "US"
+
+  llm:
+    enabled: true
+    providers:
+      - "deepseek"
+      - "openai"
+      - "ollama"
+    fallback_to_heuristic: true
+
+# Analist-1: Technical Anomaly Detection
+analist_1:
+  enabled: true
+  weight: 1.0
+
+  anomaly_detection:
+    zscore_threshold: 2.0
+    volume_rank_threshold: 0.7
+    lookback_window: 60
+
+  trend_confirmation:
+    window: 20
+    threshold: 0.05
+
+# Analist-2: News/Macro/LLM
+analist_2:
+  enabled: true
+  weight: 1.2
+
+  news_analysis:
+    sentiment_threshold: 0.3
+    max_age_days: 3
+
+  macro_analysis:
+    event_impact_weights:
+      HIGH: 1.0
+      MEDIUM: 0.5
+      LOW: 0.2
+    max_age_days: 7
+
+  llm_config:
+    model: "deepseek-chat"
+    temperature: 0.7
+    max_tokens: 500
+    timeout_seconds: 10
+
+# Analist-3: Regime/DSI Risk
+analist_3:
+  enabled: true
+  weight: 0.8
+
+  regime_analysis:
+    volatility_window: 30
+    trend_window: 60
+    structural_break_penalty: -0.4
+
+  dsi_analysis:
+    contrarian_mode: true
+    extreme_fear_threshold: 0.3
+    extreme_greed_threshold: 0.7
+
+  position_sizing:
+    base_multiplier: 1.0
+    risk_on_multiplier: 1.5
+    risk_off_multiplier: 0.5
+    min_multiplier: 0.25
+    max_multiplier: 2.0
+
+# Ensemble Logic
+ensemble_legacy:
+  enabled: true
+  combination_method: "weighted_voting"
+
+  disagreement_penalty:
+    enabled: true
+    threshold: 0.5
+    penalty_factor: 0.5
+
+  uncertainty_calculation:
+    base_source: "disagreement"
+    missing_analyst_penalty: 0.15
+
+  min_analysts_required: 2
+
+# Risk Management (detailed)
+risk_management:
+  position_sizing:
+    method: "fixed_risk"
+    risk_per_trade_pct: 1.0
+    max_position_size_pct: 10.0
+
+  stop_loss:
+    enabled: true
+    type: "percentage"
+    percentage: 5.0
+    use_trailing: false
+    trailing_distance_pct: 3.0
+
+  take_profit:
+    enabled: true
+    type: "percentage"
+    percentage: 10.0
+
+  volatility_scaling:
+    enabled: false
+    reference_vol: 0.02
+    multiplier: 1.5
+
+# Portfolio Constraints
+portfolio_constraints:
+  turnover_limits:
+    max_daily_trades: 10
+    max_daily_notional: 50000.0
+
+  cooldown:
+    enabled: true
+    hours_after_flip: 24
+
+  correlation_netting:
+    enabled: true
+    max_correlated_exposure_pct: 50.0
+
+  max_open_positions: 5
+
+# Execution (detailed)
+execution_legacy:
+  mode: "paper"
+  initial_capital: 100000.0
+
+  slippage:
+    model: "fixed_percentage"
+    percentage: 0.1
+
+  commission:
+    model: "fixed_percentage"
+    percentage: 0.1
+
+# Backtest Settings
+backtest:
+  date_ranges:
+    crypto:
+      start: "2017-01-01"
+      end: "2025-01-17"
+    traditional:
+      start: "2008-01-01"
+      end: "2025-01-17"
+
+  rebalance_frequency: "daily"
+
+  metrics:
+    - "total_return"
+    - "cagr"
+    - "sharpe_ratio"
+    - "sortino_ratio"
+    - "max_drawdown"
+    - "win_rate"
+    - "avg_win_loss_ratio"
+    - "profit_factor"
+
+  benchmark: "^GSPC"
+
+# Daemon Settings
+daemon:
+  mode: "once"
+  interval_seconds: 900
+
+  health_check:
+    enabled: true
+    lookback_hours: 24
+    min_success_rate: 0.9
+
+  snapshot:
+    enabled: true
+    frequency: "after_each_cycle"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+  outputs:
+    - type: "console"
+    - type: "file"
+      path: "logs/baseline_v2.log"
+      rotation: "daily"
+      retention_days: 30
