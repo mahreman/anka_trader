@@ -8,13 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
-import random
-import yaml
-from copy import deepcopy
 from datetime import datetime
-from itertools import product
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
@@ -22,11 +18,13 @@ from ..config import load_strategy, StrategyConfig
 from ..data import Experiment, ExperimentRun
 from ..eval.portfolio_backtest import run_backtest
 from ..eval.performance_report import calculate_metrics
+from .grid import ParamGrid
+from .config_utils import apply_param_overrides as apply_config_overrides
 
 logger = logging.getLogger(__name__)
 
 
-def load_param_grid(path: str | Path) -> Dict[str, Any]:
+def load_param_grid(path: str | Path) -> ParamGrid:
     """
     Load parameter grid from YAML file.
 
@@ -34,89 +32,65 @@ def load_param_grid(path: str | Path) -> Dict[str, Any]:
         path: Path to grid YAML file
 
     Returns:
-        Dictionary with grid configuration
+        ParamGrid instance
 
     Example:
         >>> grid = load_param_grid("grids/baseline_grid.yaml")
-        >>> print(grid["parameters"])
+        >>> print(grid.params)
     """
     path = Path(path)
 
     if not path.exists():
         raise FileNotFoundError(f"Parameter grid file not found: {path}")
 
-    with open(path, "r") as f:
-        grid = yaml.safe_load(f)
-
-    if not isinstance(grid, dict):
-        raise ValueError(f"Invalid grid file: expected dict, got {type(grid)}")
-
-    return grid
+    return ParamGrid.from_yaml(str(path))
 
 
 def generate_param_combinations(
-    param_grid: Dict[str, Any],
-    search_method: str = "grid",
+    param_grid: ParamGrid | Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     """
     Generate parameter combinations from grid.
 
     Args:
-        param_grid: Parameter grid dictionary
-        search_method: "grid" (exhaustive) or "random" (sample)
+        param_grid: ParamGrid instance or dict with grid config
 
     Returns:
         List of parameter combination dictionaries
 
     Example:
-        >>> grid = {"risk_pct": {"values": [0.5, 1.0]}, "sl": {"values": [3, 5]}}
-        >>> combos = generate_param_combinations({"parameters": grid})
-        >>> len(combos)  # 2 * 2 = 4 combinations
-        4
+        >>> grid = ParamGrid(params={"risk_pct": [0.5, 1.0]})
+        >>> combos = generate_param_combinations(grid)
+        >>> len(combos)
+        2
     """
-    parameters = param_grid.get("parameters", {})
+    # Handle both ParamGrid and dict inputs for backward compatibility
+    if isinstance(param_grid, dict):
+        # Legacy dict format - convert to ParamGrid
+        logger.warning("Passing dict to generate_param_combinations is deprecated. Use ParamGrid instead.")
 
-    if not parameters:
-        logger.warning("No parameters defined in grid")
-        return [{}]
+        parameters = param_grid.get("parameters", {})
+        if not parameters:
+            logger.warning("No parameters defined in grid")
+            return [{}]
 
-    # Extract parameter names and values
-    param_names = []
-    param_values = []
+        # Extract values
+        params = {}
+        for param_name, param_config in parameters.items():
+            if "values" in param_config:
+                params[param_name] = param_config["values"]
 
-    for param_name, param_config in parameters.items():
-        if "values" in param_config:
-            param_names.append(param_name)
-            param_values.append(param_config["values"])
-
-    if not param_names:
-        return [{}]
-
-    # Generate combinations
-    if search_method == "grid":
-        # Exhaustive grid search
-        combinations = []
-        for combo_values in product(*param_values):
-            combo = dict(zip(param_names, combo_values))
-            combinations.append(combo)
-
-        logger.info(f"Generated {len(combinations)} parameter combinations (grid search)")
-
-    elif search_method == "random":
-        # Random search
-        n_samples = param_grid.get("random_samples", 50)
-        combinations = []
-
-        for _ in range(n_samples):
-            combo = {}
-            for param_name, values in zip(param_names, param_values):
-                combo[param_name] = random.choice(values)
-            combinations.append(combo)
-
-        logger.info(f"Generated {n_samples} parameter combinations (random search)")
-
+        grid = ParamGrid(
+            params=params,
+            search_method=param_grid.get("search_method", "grid"),
+            random_samples=param_grid.get("random_samples", 50),
+        )
     else:
-        raise ValueError(f"Unknown search method: {search_method}")
+        grid = param_grid
+
+    # Use ParamGrid's iter_combinations
+    combinations = grid.iter_combinations()
+    logger.info(f"Generated {len(combinations)} parameter combinations ({grid.search_method} search)")
 
     return combinations
 
@@ -139,29 +113,18 @@ def apply_param_overrides(
         >>> overrides = {"risk_management.stop_loss.percentage": 5.0}
         >>> new_config = apply_param_overrides(base_config, overrides)
     """
-    # Deep copy to avoid modifying original
-    config_dict = deepcopy(strategy_config.raw_config)
+    # Use config_utils.apply_param_overrides for the actual work
+    modified_config_dict = apply_config_overrides(
+        strategy_config.raw_config,
+        param_overrides,
+    )
 
-    # Apply overrides
-    for param_path, value in param_overrides.items():
-        keys = param_path.split(".")
-        current = config_dict
-
-        # Navigate to target location
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-
-        # Set value
-        current[keys[-1]] = value
-
-    # Create new config
+    # Create new StrategyConfig with modified dict
     return StrategyConfig(
         name=strategy_config.name,
         description=strategy_config.description,
         version=strategy_config.version,
-        raw_config=config_dict,
+        raw_config=modified_config_dict,
     )
 
 
@@ -322,13 +285,18 @@ def run_grid_search(
     strategy_config = load_strategy(strategy_path)
     param_grid = load_param_grid(grid_path)
 
+    # Also load raw YAML for metadata (split, symbols, etc.)
+    import yaml
+    with open(grid_path, "r") as f:
+        grid_metadata = yaml.safe_load(f)
+
     logger.info(f"Base strategy: {strategy_config.name} v{strategy_config.version}")
-    logger.info(f"Parameter grid: {param_grid.get('name', 'unnamed')}")
+    logger.info(f"Parameter grid: {grid_metadata.get('name', 'unnamed')}")
 
     # Create experiment
     experiment = Experiment(
         name=experiment_name,
-        description=param_grid.get("description", "Grid search experiment"),
+        description=grid_metadata.get("description", "Grid search experiment"),
         base_strategy_name=strategy_config.name,
         param_grid_path=str(grid_path),
     )
@@ -337,20 +305,19 @@ def run_grid_search(
     session.commit()
 
     # Get split dates
-    split = param_grid.get("split", {})
+    split = grid_metadata.get("split", {})
     train_start = split.get("train_start", "2017-01-01")
     train_end = split.get("train_end", "2022-12-31")
     test_start = split.get("test_start")
     test_end = split.get("test_end")
 
     # Get symbols
-    symbols = param_grid.get("symbols", [])
+    symbols = grid_metadata.get("symbols", [])
     if not symbols:
         symbols = strategy_config.get_symbols()
 
-    # Generate combinations
-    search_method = param_grid.get("search_method", "grid")
-    combinations = generate_param_combinations(param_grid, search_method)
+    # Generate combinations using ParamGrid
+    combinations = generate_param_combinations(param_grid)
 
     logger.info(f"Running {len(combinations)} parameter combinations")
 
