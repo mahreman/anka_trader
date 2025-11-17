@@ -104,6 +104,8 @@ class Anomaly(Base):
 class Decision(Base):
     """
     Trading decisions made by the Patron.
+
+    P2 additions: Ensemble fields for multi-analyst consensus.
     """
 
     __tablename__ = "decisions"
@@ -118,6 +120,12 @@ class Decision(Base):
     signal = Column(String(10), nullable=False)  # BUY, SELL, HOLD
     confidence = Column(Float, nullable=False)  # 0-1
     reason = Column(Text, nullable=False)  # Explanation
+
+    # P2: Ensemble fields
+    p_up = Column(Float, nullable=True)  # Ensemble probability of up move (0-1)
+    disagreement = Column(Float, nullable=True)  # Analyst disagreement (0-1)
+    analyst_signals = Column(Text, nullable=True)  # JSON string of analyst signals
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
