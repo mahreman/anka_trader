@@ -183,3 +183,68 @@ class DataHealthIndex(Base):
 
     def __repr__(self) -> str:
         return f"<DataHealthIndex(symbol_id={self.symbol_id}, date={self.date}, dsi={self.dsi:.2f})>"
+
+
+class Hypothesis(Base):
+    """
+    Trading hypothesis for backtesting.
+    P1 extension: Hypothesis backlog tracking.
+    """
+
+    __tablename__ = "hypotheses"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    rule_signature = Column(Text, nullable=False)  # e.g., "SPIKE_DOWN + Uptrend → BUY"
+    config_json = Column(Text, nullable=True)  # Serialized config (JSON string)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    results = relationship("HypothesisResult", back_populates="hypothesis", cascade="all, delete-orphan")
+
+    def __repr__(self) -> str:
+        return f"<Hypothesis(id={self.id}, name='{self.name}')>"
+
+
+class HypothesisResult(Base):
+    """
+    Backtest results for a hypothesis.
+    P1 extension: Event-based backtest tracking.
+    """
+
+    __tablename__ = "hypothesis_results"
+    __table_args__ = (
+        Index("ix_hyp_results_hypothesis", "hypothesis_id"),
+        Index("ix_hyp_results_symbol", "symbol_id"),
+        Index("ix_hyp_results_entry_date", "entry_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    hypothesis_id = Column(Integer, ForeignKey("hypotheses.id"), nullable=False)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+    anomaly_id = Column(Integer, ForeignKey("anomalies.id"), nullable=True)
+    decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True)
+
+    entry_date = Column(Date, nullable=False)
+    exit_date = Column(Date, nullable=False)
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    pnl = Column(Float, nullable=False)  # Absolute PnL
+    pnl_pct = Column(Float, nullable=False)  # Percentage PnL
+
+    # P1 context
+    regime_id = Column(Integer, nullable=True)  # Market regime at entry
+    dsi = Column(Float, nullable=True)  # Data quality at entry
+
+    meta_json = Column(Text, nullable=True)  # Additional metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    hypothesis = relationship("Hypothesis", back_populates="results")
+    symbol_obj = relationship("Symbol")
+    anomaly_obj = relationship("Anomaly")
+    decision_obj = relationship("Decision")
+
+    def __repr__(self) -> str:
+        return f"<HypothesisResult(id={self.id}, hypothesis_id={self.hypothesis_id}, pnl={self.pnl:.2f})>"

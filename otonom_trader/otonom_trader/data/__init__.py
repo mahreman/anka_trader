@@ -10,6 +10,8 @@ from .schema import (
     Decision as DecisionORM,
     Regime as RegimeORM,
     DataHealthIndex as DsiORM,
+    Hypothesis,
+    HypothesisResult,
 )
 
 __all__ = [
@@ -23,4 +25,6 @@ __all__ = [
     "DecisionORM",
     "RegimeORM",
     "DsiORM",
+    "Hypothesis",
+    "HypothesisResult",
 ]

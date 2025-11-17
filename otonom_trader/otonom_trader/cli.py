@@ -649,12 +649,212 @@ def list_dsi(
 
 
 @app.command()
+def run_backtest(
+    name: str = typer.Option(..., "--name", help="Hypothesis name"),
+    rule: str = typer.Option(..., "--rule", help="Rule signature"),
+    holding_days: int = typer.Option(5, "--holding-days", help="Holding period (days)"),
+    slippage_bps: float = typer.Option(5.0, "--slippage-bps", help="Slippage (basis points)"),
+    description: Optional[str] = typer.Option(None, "--description", help="Hypothesis description"),
+):
+    """
+    Run event-based backtest on existing decisions (P1 feature).
+
+    Creates or uses existing hypothesis and backtests all historical decisions.
+    Requires anomalies and decisions to be already computed.
+
+    Examples:
+        otonom-trader run-backtest --name "P0_basic_v1" \\
+            --rule "SPIKE_DOWN+Uptrend→BUY; SPIKE_UP+Downtrend→SELL; 5d hold"
+
+        otonom-trader run-backtest --name "test_10d" --rule "Basic rules" \\
+            --holding-days 10 --slippage-bps 10.0
+    """
+    try:
+        from .eval.backtest import (
+            BacktestConfig,
+            create_or_get_hypothesis,
+            run_event_backtest,
+            get_backtest_summary,
+        )
+
+        typer.echo(f"Running backtest: {name}")
+        typer.echo(f"Rule: {rule}")
+        typer.echo(f"Config: holding_days={holding_days}, slippage_bps={slippage_bps}")
+
+        with next(get_session()) as session:
+            # Create or get hypothesis
+            hypothesis = create_or_get_hypothesis(
+                session,
+                name=name,
+                rule_signature=rule,
+                description=description,
+            )
+
+            # Configure backtest
+            config = BacktestConfig(
+                holding_days=holding_days,
+                slippage_bps=slippage_bps,
+            )
+
+            # Run backtest
+            count = run_event_backtest(session, hypothesis, config)
+
+            typer.echo(f"\n✓ Backtest completed: {count} trades simulated")
+
+            # Show summary
+            summary = get_backtest_summary(session, hypothesis.id)
+
+            typer.echo("\nBacktest Summary:")
+            typer.echo("=" * 40)
+            typer.echo(f"Total trades:  {summary['total_trades']}")
+            typer.echo(f"Win rate:      {summary['win_rate']*100:.2f}%")
+            typer.echo(f"Avg PnL:       {summary['avg_pnl_pct']*100:+.2f}%")
+            typer.echo(f"Total PnL:     {summary['total_pnl']:+.2f}")
+            if summary['avg_win_pct']:
+                typer.echo(f"Avg win:       {summary['avg_win_pct']*100:+.2f}%")
+            if summary['avg_loss_pct']:
+                typer.echo(f"Avg loss:      {summary['avg_loss_pct']*100:+.2f}%")
+
+    except Exception as e:
+        typer.echo(f"✗ Error running backtest: {e}", err=True)
+        logger.exception("Backtest failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def list_hypotheses(
+    limit: int = typer.Option(20, "--limit", help="Maximum number to display"),
+):
+    """
+    List all hypotheses (P1 feature).
+
+    Examples:
+        otonom-trader list-hypotheses
+        otonom-trader list-hypotheses --limit 10
+    """
+    try:
+        from .data.schema import Hypothesis
+
+        with next(get_session()) as session:
+            hypotheses = (
+                session.query(Hypothesis)
+                .order_by(Hypothesis.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+        if not hypotheses:
+            typer.echo("No hypotheses found")
+            return
+
+        typer.echo("ID   | Name                    | Rule")
+        typer.echo("-" * 70)
+
+        for h in hypotheses:
+            rule = h.rule_signature if len(h.rule_signature) <= 40 else h.rule_signature[:37] + "..."
+            typer.echo(f"{h.id:>4} | {h.name:23} | {rule}")
+
+        typer.echo(f"\nShowing {len(hypotheses)} hypotheses")
+
+    except Exception as e:
+        typer.echo(f"✗ Error listing hypotheses: {e}", err=True)
+        logger.exception("List hypotheses failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def show_backtest(
+    hypothesis_id: Optional[int] = typer.Option(None, "--id", help="Hypothesis ID"),
+    name: Optional[str] = typer.Option(None, "--name", help="Hypothesis name"),
+    limit: int = typer.Option(20, "--limit", help="Max results to show"),
+):
+    """
+    Show backtest results for a hypothesis (P1 feature).
+
+    Examples:
+        otonom-trader show-backtest --id 1
+        otonom-trader show-backtest --name "P0_basic_v1"
+        otonom-trader show-backtest --id 1 --limit 50
+    """
+    try:
+        from .data.schema import Hypothesis, HypothesisResult
+        from .eval.backtest import get_backtest_summary
+
+        if not hypothesis_id and not name:
+            typer.echo("✗ Must specify either --id or --name")
+            raise typer.Exit(code=1)
+
+        with next(get_session()) as session:
+            # Find hypothesis
+            if hypothesis_id:
+                hypothesis = session.query(Hypothesis).get(hypothesis_id)
+            else:
+                hypothesis = session.query(Hypothesis).filter_by(name=name).first()
+
+            if not hypothesis:
+                typer.echo("✗ Hypothesis not found")
+                raise typer.Exit(code=1)
+
+            typer.echo(f"Hypothesis: {hypothesis.name}")
+            typer.echo(f"Rule: {hypothesis.rule_signature}")
+            typer.echo()
+
+            # Get summary
+            summary = get_backtest_summary(session, hypothesis.id)
+
+            typer.echo("Summary:")
+            typer.echo("=" * 40)
+            typer.echo(f"Total trades:  {summary['total_trades']}")
+            typer.echo(f"Win rate:      {summary['win_rate']*100:.2f}%")
+            typer.echo(f"Avg PnL:       {summary['avg_pnl_pct']*100:+.2f}%")
+            typer.echo(f"Total PnL:     {summary['total_pnl']:+.2f}")
+            if summary['avg_win_pct']:
+                typer.echo(f"Avg win:       {summary['avg_win_pct']*100:+.2f}%")
+            if summary['avg_loss_pct']:
+                typer.echo(f"Avg loss:      {summary['avg_loss_pct']*100:+.2f}%")
+            typer.echo()
+
+            # Show individual results
+            results = (
+                session.query(HypothesisResult, Symbol.symbol)
+                .join(Symbol, HypothesisResult.symbol_id == Symbol.id)
+                .filter(HypothesisResult.hypothesis_id == hypothesis.id)
+                .order_by(HypothesisResult.entry_date.desc())
+                .limit(limit)
+                .all()
+            )
+
+            if results:
+                typer.echo(f"Recent results (top {limit}):")
+                typer.echo("Entry Date | Symbol     | PnL %    | Regime | DSI")
+                typer.echo("-" * 60)
+
+                for r, sym in results:
+                    regime_str = f"{r.regime_id}" if r.regime_id is not None else "-"
+                    dsi_str = f"{r.dsi:.2f}" if r.dsi is not None else "-"
+                    typer.echo(
+                        f"{r.entry_date} | {sym:>10} | {r.pnl_pct*100:>+7.2f}% | "
+                        f"{regime_str:>6} | {dsi_str:>4}"
+                    )
+
+    except Exception as e:
+        typer.echo(f"✗ Error showing backtest: {e}", err=True)
+        logger.exception("Show backtest failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def status():
     """
     Show database status and statistics.
     """
     try:
-        from .data.schema import Regime as RegimeORM, DataHealthIndex as DsiORM
+        from .data.schema import (
+            Regime as RegimeORM,
+            DataHealthIndex as DsiORM,
+            Hypothesis,
+            HypothesisResult,
+        )
 
         with next(get_session()) as session:
             # Count symbols
@@ -677,14 +877,20 @@ def status():
             # Count DSI records (P1)
             dsi_count = session.query(DsiORM).count()
 
+            # Count hypotheses and results (P1)
+            hypothesis_count = session.query(Hypothesis).count()
+            backtest_count = session.query(HypothesisResult).count()
+
             typer.echo("Database Status")
             typer.echo("=" * 40)
-            typer.echo(f"Symbols:   {symbol_count:>6}")
-            typer.echo(f"Bars:      {bar_count:>6}")
-            typer.echo(f"Anomalies: {anomaly_count:>6}")
-            typer.echo(f"Decisions: {decision_count:>6}")
-            typer.echo(f"Regimes:   {regime_count:>6}  [P1]")
-            typer.echo(f"DSI:       {dsi_count:>6}  [P1]")
+            typer.echo(f"Symbols:    {symbol_count:>6}")
+            typer.echo(f"Bars:       {bar_count:>6}")
+            typer.echo(f"Anomalies:  {anomaly_count:>6}")
+            typer.echo(f"Decisions:  {decision_count:>6}")
+            typer.echo(f"Regimes:    {regime_count:>6}  [P1]")
+            typer.echo(f"DSI:        {dsi_count:>6}  [P1]")
+            typer.echo(f"Hypotheses: {hypothesis_count:>6}  [P1]")
+            typer.echo(f"Backtests:  {backtest_count:>6}  [P1]")
 
     except Exception as e:
         typer.echo(f"✗ Error getting status: {e}", err=True)
