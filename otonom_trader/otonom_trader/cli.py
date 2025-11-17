@@ -43,6 +43,10 @@ app = typer.Typer(
 from .cli_experiments import app as experiments_app
 app.add_typer(experiments_app, name="experiments")
 
+# Add RL sub-command
+from .cli_rl import app as rl_app
+app.add_typer(rl_app, name="rl")
+
 
 def version_callback(value: bool):
     """Print version and exit."""

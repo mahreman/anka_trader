@@ -1,0 +1,136 @@
+# Data Provider Configuration
+#
+# Configure real data sources for:
+# - Price data (OHLCV, quotes)
+# - News data (headlines, sentiment)
+# - Macro data (economic indicators)
+
+# Global settings
+fallback_enabled: true  # Use fallback providers if primary fails
+cache_enabled: true     # Cache provider responses
+
+# Price Data Providers
+price_providers:
+  # Primary: Binance (for crypto)
+  - type: binance
+    enabled: true
+    api_key: ""  # Optional for public endpoints
+    api_secret: ""
+    base_url: "https://api.binance.com"  # or https://testnet.binance.vision
+    rate_limit_per_minute: 1200  # Binance allows ~1200 req/min
+    timeout_seconds: 30
+    extra:
+      use_testnet: false
+      default_interval: "1d"
+
+  # Secondary: yfinance (for stocks, ETFs, indices)
+  - type: yfinance
+    enabled: true
+    rate_limit_per_minute: 2000  # yfinance is quite generous
+    timeout_seconds: 30
+    extra:
+      auto_adjust: false
+      prepost: false
+
+  # Optional: Polygon.io (premium, requires API key)
+  - type: polygon
+    enabled: false
+    api_key: ""  # Get from polygon.io
+    base_url: "https://api.polygon.io"
+    rate_limit_per_minute: 5  # Free tier: 5 req/min
+    timeout_seconds: 30
+    extra:
+      tier: "free"  # or "starter", "developer", "advanced"
+
+  # Optional: Alpha Vantage (free tier available)
+  - type: alphavantage
+    enabled: false
+    api_key: ""  # Get from alphavantage.co
+    base_url: "https://www.alphavantage.co"
+    rate_limit_per_minute: 5  # Free tier: 5 req/min, 500 req/day
+    timeout_seconds: 30
+
+# News Data Providers
+news_providers:
+  # Primary: NewsAPI (free tier: 100 req/day)
+  - type: newsapi
+    enabled: false
+    api_key: ""  # Get from newsapi.org
+    rate_limit_per_minute: 100
+    timeout_seconds: 30
+    extra:
+      language: "en"
+      country: "us"
+      sources: ""  # Comma-separated, e.g., "bloomberg,reuters"
+
+  # Secondary: Polygon News (requires Polygon API key)
+  - type: polygon_news
+    enabled: false
+    api_key: ""  # Same as Polygon price API key
+    base_url: "https://api.polygon.io"
+    rate_limit_per_minute: 5
+    timeout_seconds: 30
+
+  # Optional: RSS Feeds (free, no API key needed)
+  - type: rss
+    enabled: true
+    rate_limit_per_minute: 10
+    timeout_seconds: 30
+    extra:
+      feeds:
+        - url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+          name: "CNBC Top News"
+        - url: "https://feeds.bloomberg.com/markets/news.rss"
+          name: "Bloomberg Markets"
+        - url: "https://www.reuters.com/business"
+          name: "Reuters Business"
+
+# Macro Data Providers
+macro_providers:
+  # Primary: FRED (Federal Reserve Economic Data)
+  - type: fred
+    enabled: true
+    api_key: ""  # Get free API key from fred.stlouisfed.org
+    base_url: "https://api.stlouisfed.org/fred"
+    rate_limit_per_minute: 120  # FRED allows 120 req/min
+    timeout_seconds: 30
+    extra:
+      default_indicators:
+        - "DFF"      # Federal Funds Rate
+        - "UNRATE"   # Unemployment Rate
+        - "CPIAUCSL" # CPI (inflation)
+        - "GDP"      # GDP
+        - "T10Y2Y"   # 10Y-2Y Treasury Spread
+
+  # Optional: World Bank
+  - type: worldbank
+    enabled: false
+    rate_limit_per_minute: 60
+    timeout_seconds: 30
+    extra:
+      default_indicators:
+        - "NY.GDP.MKTP.CD"  # GDP (current US$)
+        - "FP.CPI.TOTL.ZG"  # Inflation
+
+  # Optional: Trading Economics
+  - type: tradingeconomics
+    enabled: false
+    api_key: ""  # Premium service
+    base_url: "https://api.tradingeconomics.com"
+    rate_limit_per_minute: 60
+    timeout_seconds: 30
+
+# Provider Priority
+# When multiple providers are enabled, they are used in order:
+# 1. First enabled provider = primary
+# 2. Subsequent enabled providers = fallbacks (if fallback_enabled: true)
+
+# Rate Limiting
+# Each provider has independent rate limiting.
+# The system will automatically throttle requests to stay within limits.
+
+# Caching
+# When cache_enabled: true, provider responses are cached for:
+# - OHLCV data: 1 hour (for recent data)
+# - News: 5 minutes
+# - Macro: 24 hours (macro data updates slowly)
