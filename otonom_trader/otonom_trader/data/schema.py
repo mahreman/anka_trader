@@ -124,6 +124,7 @@ class Decision(Base):
     # P2: Ensemble fields
     p_up = Column(Float, nullable=True)  # Ensemble probability of up move (0-1)
     disagreement = Column(Float, nullable=True)  # Analyst disagreement (0-1)
+    uncertainty = Column(Float, nullable=True)  # Decision uncertainty (0-1, higher = less certain)
     analyst_signals = Column(Text, nullable=True)  # JSON string of analyst signals
 
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -203,13 +203,8 @@ def make_ensemble_decision_for_anomaly(
     import json
     from .ensemble import AnalystSignal, combine_signals, apply_disagreement_penalty
     from ..analytics import (
-        get_recent_news,
-        aggregate_sentiment,
-        get_recent_events,
-        compute_macro_bias,
-        get_llm_signal_with_fallback,
-        resolve_regime,
-        resolve_dsi,
+        generate_news_analyst_signal,
+        generate_risk_analyst_signal,
     )
 
     # Get basic technical analysis (existing rules)
@@ -265,152 +260,60 @@ def make_ensemble_decision_for_anomaly(
     })
 
     # ============================================================
-    # Analist-2: News/Macro + LLM
+    # Analist-2: News/Macro + LLM (using analyst_news module)
     # ============================================================
     try:
-        # Get recent news (last 3 days)
-        news_items = get_recent_news(anomaly.asset_symbol, days_back=3)
-        news_sentiment = aggregate_sentiment(news_items) if news_items else 0.0
-        news_summary = f"3-day sentiment: {news_sentiment:.2f}"
-        if news_items:
-            top_headlines = [n.headline for n in news_items[:3]]
-            news_summary += f" | Top: {'; '.join(top_headlines[:2])}"
+        llm_signal = generate_news_analyst_signal(session, anomaly)
 
-        # Get recent macro events (last 7 days)
-        macro_events = get_recent_events(days_back=7, region="US")
-        macro_bias = compute_macro_bias(macro_events) if macro_events else 0.0
-        macro_summary = f"7-day macro bias: {macro_bias:.2f}"
-        if macro_events:
-            key_events = [e.event_name for e in macro_events[:3]]
-            macro_summary += f" | Key: {'; '.join(key_events[:2])}"
-
-        # Build anomaly context
-        anomaly_context = (
-            f"{anomaly.anomaly_type.value} detected on {anomaly.date}, "
-            f"zscore={anomaly.zscore:.2f}, volume_rank={anomaly.volume_rank:.2f}"
-        )
-
-        # Get regime/DSI context for Analist-3 input
-        regime_data = resolve_regime(session, anomaly.asset_symbol, anomaly.date)
-        dsi_data = resolve_dsi(session, anomaly.asset_symbol, anomaly.date)
-        regime_context = ""
-        if regime_data:
-            regime_id, vol, trend, is_break = regime_data
-            regime_context = f"Regime: {regime_id}, Vol: {vol:.4f}, Trend: {trend:.4f}"
-            if is_break:
-                regime_context += " (structural break!)"
-        if dsi_data:
-            dsi_score, _, _, _ = dsi_data
-            regime_context += f" | DSI: {dsi_score:.2f}"
-
-        # Call LLM
-        llm_signal = get_llm_signal_with_fallback(
-            symbol=anomaly.asset_symbol,
-            anomaly_context=anomaly_context,
-            news_summary=news_summary,
-            macro_summary=macro_summary,
-            regime_context=regime_context,
-        )
-
-        signals.append(
-            AnalystSignal(
-                name="Analist-2 (News/Macro/LLM)",
-                direction=llm_signal.direction,
-                p_up=llm_signal.p_up,
-                confidence=llm_signal.confidence,
-                weight=1.2,  # Slightly higher weight for LLM
+        if llm_signal:
+            signals.append(
+                AnalystSignal(
+                    name="Analist-2 (News/Macro/LLM)",
+                    direction=llm_signal.direction,
+                    p_up=llm_signal.p_up,
+                    confidence=llm_signal.confidence,
+                    weight=1.2,  # Slightly higher weight for LLM
+                )
             )
-        )
-        analyst_details.append({
-            "name": "Analist-2 (News/Macro/LLM)",
-            "direction": llm_signal.direction,
-            "p_up": llm_signal.p_up,
-            "confidence": llm_signal.confidence,
-            "reasoning": llm_signal.reasoning,
-        })
+            analyst_details.append({
+                "name": "Analist-2 (News/Macro/LLM)",
+                "direction": llm_signal.direction,
+                "p_up": llm_signal.p_up,
+                "confidence": llm_signal.confidence,
+                "reasoning": llm_signal.reasoning,
+            })
 
     except Exception as e:
-        logger.warning(f"Analist-2 (LLM) failed: {e}")
+        logger.warning(f"Analist-2 (News/Macro/LLM) failed: {e}")
         # Continue without LLM signal
 
     # ============================================================
-    # Analist-3: Regime/DSI adjustment
+    # Analist-3: Risk Assessment (using analyst_risk module)
     # ============================================================
     try:
-        regime_data = resolve_regime(session, anomaly.asset_symbol, anomaly.date)
-        dsi_data = resolve_dsi(session, anomaly.asset_symbol, anomaly.date)
+        risk_signal = generate_risk_analyst_signal(session, anomaly)
 
-        # Simple heuristic for regime-based signal
-        # Low vol regime + BUY signal -> more confidence
-        # High vol regime + any signal -> less confidence
-        # Structural break -> HOLD bias
-
-        regime_direction = "HOLD"
-        regime_confidence = 0.5
-        regime_p_up = 0.5
-
-        if regime_data:
-            regime_id, vol, trend, is_break = regime_data
-
-            if is_break:
-                # Structural break -> caution
-                regime_direction = "HOLD"
-                regime_confidence = 0.4
-                regime_p_up = 0.5
-            elif regime_id == 0:  # Low vol
-                # Low vol + uptrend -> bullish
-                if trend > 0:
-                    regime_direction = "BUY"
-                    regime_confidence = 0.6
-                    regime_p_up = 0.6
-                else:
-                    regime_direction = "HOLD"
-                    regime_confidence = 0.5
-                    regime_p_up = 0.5
-            elif regime_id == 2:  # High vol
-                # High vol -> caution
-                regime_direction = "HOLD"
-                regime_confidence = 0.4
-                regime_p_up = 0.5
-            else:  # Normal vol
-                if trend > 0:
-                    regime_direction = "BUY"
-                    regime_confidence = 0.55
-                    regime_p_up = 0.55
-                elif trend < 0:
-                    regime_direction = "SELL"
-                    regime_confidence = 0.55
-                    regime_p_up = 0.45
-                else:
-                    regime_direction = "HOLD"
-                    regime_confidence = 0.5
-                    regime_p_up = 0.5
-
-        # DSI penalty: low DSI -> reduce confidence
-        if dsi_data:
-            dsi_score, _, _, _ = dsi_data
-            if dsi_score < 0.5:
-                regime_confidence *= 0.8  # 20% penalty for low DSI
-
-        signals.append(
-            AnalystSignal(
-                name="Analist-3 (Regime/DSI)",
-                direction=regime_direction,
-                p_up=regime_p_up,
-                confidence=regime_confidence,
-                weight=0.8,  # Lower weight for heuristic
+        if risk_signal:
+            signals.append(
+                AnalystSignal(
+                    name="Analist-3 (Risk)",
+                    direction=risk_signal["direction"],
+                    p_up=risk_signal["p_up"],
+                    confidence=risk_signal["confidence"],  # Position size multiplier
+                    weight=0.8,
+                )
             )
-        )
-        analyst_details.append({
-            "name": "Analist-3 (Regime/DSI)",
-            "direction": regime_direction,
-            "p_up": regime_p_up,
-            "confidence": regime_confidence,
-        })
+            analyst_details.append({
+                "name": "Analist-3 (Risk)",
+                "direction": risk_signal["direction"],
+                "p_up": risk_signal["p_up"],
+                "confidence": risk_signal["confidence"],
+                "reasoning": risk_signal["reasoning"],
+            })
 
     except Exception as e:
-        logger.warning(f"Analist-3 (Regime/DSI) failed: {e}")
-        # Continue without regime signal
+        logger.warning(f"Analist-3 (Risk) failed: {e}")
+        # Continue without risk signal
 
     # ============================================================
     # Combine signals
@@ -432,11 +335,53 @@ def make_ensemble_decision_for_anomaly(
     else:
         final_signal = SignalType.HOLD
 
-    # Create enhanced decision
+    # ============================================================
+    # Calculate uncertainty
+    # ============================================================
+    # Uncertainty is based on:
+    # 1. Analyst disagreement (high disagreement = high uncertainty)
+    # 2. Number of analysts (fewer analysts = higher uncertainty)
+    # 3. Data availability (missing analysts = higher uncertainty)
+
+    num_analysts = len(signals)
+    max_analysts = 3  # We expect 3 analysts
+
+    # Base uncertainty from disagreement
+    uncertainty = ensemble.disagreement
+
+    # Penalty for missing analysts
+    if num_analysts < max_analysts:
+        missing_penalty = (max_analysts - num_analysts) * 0.15
+        uncertainty = min(1.0, uncertainty + missing_penalty)
+
+    # ============================================================
+    # Build detailed multi-analyst explanation
+    # ============================================================
+    analyst_explanations = []
+
+    for detail in analyst_details:
+        name = detail["name"].split("(")[1].rstrip(")")  # Extract short name
+        direction = detail["direction"]
+
+        # Add reasoning if available
+        if "reasoning" in detail:
+            reasoning = detail["reasoning"]
+            # Truncate long reasoning
+            if len(reasoning) > 80:
+                reasoning = reasoning[:77] + "..."
+            analyst_explanations.append(f"{name}: {direction} ({reasoning})")
+        else:
+            analyst_explanations.append(f"{name}: {direction}")
+
+    # Join all analyst explanations
+    multi_analyst_reason = " | ".join(analyst_explanations)
+
+    # Create enhanced decision with detailed explanation
     enhanced_reason = (
-        base_decision.reason
-        + f"\n[Ensemble: direction={ensemble.direction}, p_up={ensemble.p_up:.2f}, "
-        f"disagreement={ensemble.disagreement:.2f}, adjusted_confidence={adjusted_confidence:.2f}]"
+        f"MULTI-ANALYST DECISION:\n"
+        f"{multi_analyst_reason}\n"
+        f"→ ENSEMBLE: {ensemble.direction} (p_up={ensemble.p_up:.2f}, "
+        f"disagreement={ensemble.disagreement:.2f}, uncertainty={uncertainty:.2f})"
     )
 
     decision = DecisionDomain(
@@ -447,6 +392,7 @@ def make_ensemble_decision_for_anomaly(
         reason=enhanced_reason,
         p_up=ensemble.p_up,
         disagreement=ensemble.disagreement,
+        uncertainty=uncertainty,
         analyst_signals=json.dumps(analyst_details),
     )
 
@@ -462,6 +408,7 @@ def make_ensemble_decision_for_anomaly(
                 reason=decision.reason,
                 p_up=decision.p_up,
                 disagreement=decision.disagreement,
+                uncertainty=decision.uncertainty,
                 analyst_signals=decision.analyst_signals,
             )
             session.add(decision_orm)

@@ -81,6 +81,7 @@ class Decision:
         reason: Human-readable explanation of the decision
         p_up: Ensemble probability of upward price movement (0-1, optional)
         disagreement: Analyst disagreement metric (0-1, optional)
+        uncertainty: Decision uncertainty metric (0-1, higher = less certain, optional)
         analyst_signals: Optional JSON string of individual analyst signals
     """
 
@@ -91,6 +92,7 @@ class Decision:
     reason: str
     p_up: Optional[float] = None
     disagreement: Optional[float] = None
+    uncertainty: Optional[float] = None
     analyst_signals: Optional[str] = None
 
     def __post_init__(self):
@@ -107,3 +109,5 @@ class Decision:
             raise ValueError("p_up must be between 0 and 1")
         if self.disagreement is not None and (self.disagreement < 0 or self.disagreement > 1):
             raise ValueError("disagreement must be between 0 and 1")
+        if self.uncertainty is not None and (self.uncertainty < 0 or self.uncertainty > 1):
+            raise ValueError("uncertainty must be between 0 and 1")
