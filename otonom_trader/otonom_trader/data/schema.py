@@ -366,6 +366,65 @@ class PortfolioSnapshot(Base):
         return f"<PortfolioSnapshot(ts={self.timestamp}, equity=${self.equity:.2f}, dd={dd_str})>"
 
 
+class Trade(Base):
+    """
+    Trade execution record for backtesting and live trading.
+
+    Tracks individual trades with entry/exit details and risk metrics.
+    """
+
+    __tablename__ = "trades"
+    __table_args__ = (
+        Index("ix_trades_symbol_entry", "symbol_id", "entry_date"),
+        Index("ix_trades_strategy", "strategy_name"),
+        Index("ix_trades_exit_date", "exit_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+
+    # Strategy tracking
+    strategy_name = Column(String(100), nullable=True)  # Strategy that generated trade
+    strategy_version = Column(String(20), nullable=True)  # Strategy version (e.g., "1.0")
+
+    # Trade timing
+    entry_date = Column(Date, nullable=False, index=True)
+    exit_date = Column(Date, nullable=True)  # Null for open trades
+    holding_days = Column(Integer, nullable=True)  # Days held
+
+    # Trade execution
+    direction = Column(String(10), nullable=False)  # BUY or SELL
+    entry_price = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=True)  # Null for open trades
+    quantity = Column(Float, nullable=False)  # Position size
+
+    # P&L
+    pnl = Column(Float, nullable=True)  # Absolute P&L
+    pnl_pct = Column(Float, nullable=True)  # Percentage P&L
+
+    # Risk metrics
+    r_multiple = Column(Float, nullable=True)  # Reward-to-risk ratio (PnL / Initial Risk)
+    initial_risk = Column(Float, nullable=True)  # Initial risk amount (for R-multiple calculation)
+    stop_loss_price = Column(Float, nullable=True)  # Stop loss price
+    take_profit_price = Column(Float, nullable=True)  # Take profit price
+
+    # Context
+    regime_id = Column(Integer, nullable=True)  # Market regime at entry
+    decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True)  # Link to decision
+
+    # Metadata
+    notes = Column(Text, nullable=True)  # Optional notes
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    symbol_obj = relationship("Symbol")
+    decision_obj = relationship("Decision")
+
+    def __repr__(self) -> str:
+        pnl_str = f"${self.pnl:.2f}" if self.pnl is not None else "Open"
+        return f"<Trade(id={self.id}, symbol_id={self.symbol_id}, {self.direction}, pnl={pnl_str})>"
+
+
 class NewsArticle(Base):
     """
     News articles for sentiment analysis.

@@ -55,6 +55,10 @@ app.add_typer(research_app, name="research")
 from .cli_strategy import app as strategy_app
 app.add_typer(strategy_app, name="strategy")
 
+# Add backtest sub-command
+from .cli_backtest import app as backtest_app
+app.add_typer(backtest_app, name="backtest")
+
 
 def version_callback(value: bool):
     """Print version and exit."""
