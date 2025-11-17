@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 from sqlalchemy.orm import Session
 
-from ..config import load_strategy, StrategyConfig
+from .config import load_strategy_config, StrategyConfig
 from ..data import Experiment, ExperimentRun
 from .versioning import (
     StrategyVersion,
@@ -244,7 +244,7 @@ def promote_strategy(
         ... )
     """
     # Load base strategy
-    base_strategy = load_strategy(base_strategy_path)
+    base_strategy = load_strategy_config(base_strategy_path)
 
     # Parse current version
     current_version = StrategyVersion.from_path(base_strategy_path)

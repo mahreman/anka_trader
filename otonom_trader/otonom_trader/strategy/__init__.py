@@ -2,11 +2,23 @@
 Strategy management package.
 
 Provides utilities for:
+- Strategy configuration (standardized contract)
 - Strategy versioning (major.minor)
 - Promotion workflows
 - Criteria validation
 - Champion/challenger comparison
 """
+
+from .config import (
+    UniverseConfig,
+    RiskConfig,
+    FiltersConfig,
+    EnsembleWeightsConfig,
+    ExecutionConfig,
+    StrategyConfig,
+    load_strategy_config,
+    validate_strategy_config,
+)
 
 from .versioning import (
     StrategyVersion,
@@ -26,6 +38,15 @@ from .promotion import (
 )
 
 __all__ = [
+    # Configuration
+    "UniverseConfig",
+    "RiskConfig",
+    "FiltersConfig",
+    "EnsembleWeightsConfig",
+    "ExecutionConfig",
+    "StrategyConfig",
+    "load_strategy_config",
+    "validate_strategy_config",
     # Versioning
     "StrategyVersion",
     "PromotionCriteria",
