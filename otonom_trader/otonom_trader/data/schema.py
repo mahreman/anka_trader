@@ -38,6 +38,7 @@ class Symbol(Base):
     anomalies = relationship("Anomaly", back_populates="symbol_obj", cascade="all, delete-orphan")
     decisions = relationship("Decision", back_populates="symbol_obj", cascade="all, delete-orphan")
     regimes = relationship("Regime", back_populates="symbol_obj", cascade="all, delete-orphan")
+    dsi_records = relationship("DataHealthIndex", back_populates="symbol_obj", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Symbol(id={self.id}, symbol='{self.symbol}', name='{self.name}')>"
@@ -153,3 +154,32 @@ class Regime(Base):
 
     def __repr__(self) -> str:
         return f"<Regime(symbol_id={self.symbol_id}, date={self.date}, regime_id={self.regime_id})>"
+
+
+class DataHealthIndex(Base):
+    """
+    Data Health Index (DSI) for each symbol and date.
+    P1 extension: Data quality monitoring.
+    """
+
+    __tablename__ = "data_health_index"
+    __table_args__ = (
+        UniqueConstraint("symbol_id", "date", name="uq_dsi_symbol_date"),
+        Index("ix_dsi_symbol_date", "symbol_id", "date"),
+        Index("ix_dsi_score", "dsi"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+    date = Column(Date, nullable=False, index=True)
+    dsi = Column(Float, nullable=False)  # Overall data health score (0-1)
+    missing_ratio = Column(Float, nullable=False)  # Fraction of missing data
+    outlier_ratio = Column(Float, nullable=False)  # Fraction of extreme outliers
+    volume_jump_ratio = Column(Float, nullable=False)  # Fraction of volume jumps
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    symbol_obj = relationship("Symbol", back_populates="dsi_records")
+
+    def __repr__(self) -> str:
+        return f"<DataHealthIndex(symbol_id={self.symbol_id}, date={self.date}, dsi={self.dsi:.2f})>"

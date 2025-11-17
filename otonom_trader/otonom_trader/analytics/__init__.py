@@ -1,5 +1,5 @@
 """
-Analytics layer - Returns calculation, anomaly detection, labeling, and regime detection.
+Analytics layer - Returns calculation, anomaly detection, labeling, regime detection, and data health.
 """
 from .returns import compute_returns
 from .anomaly import detect_anomalies_for_asset, detect_anomalies_all_assets
@@ -10,6 +10,13 @@ from .regime import (
     regimes_to_dataframe,
     persist_regimes,
     RegimePoint,
+)
+from .dsi import (
+    compute_dsi_for_symbol,
+    compute_dsi_all_symbols,
+    dsi_to_dataframe,
+    persist_dsi,
+    DsiPoint,
 )
 
 __all__ = [
@@ -22,4 +29,9 @@ __all__ = [
     "regimes_to_dataframe",
     "persist_regimes",
     "RegimePoint",
+    "compute_dsi_for_symbol",
+    "compute_dsi_all_symbols",
+    "dsi_to_dataframe",
+    "persist_dsi",
+    "DsiPoint",
 ]

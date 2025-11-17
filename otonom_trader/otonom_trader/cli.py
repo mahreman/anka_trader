@@ -506,12 +506,155 @@ def list_regimes(
 
 
 @app.command()
+def compute_dsi(
+    symbol: Optional[str] = typer.Option(
+        None, "--symbol", help="Specific symbol (default: all P0 assets)"
+    ),
+    window: int = typer.Option(60, "--window", help="Rolling window size (days)"),
+    outlier_z: float = typer.Option(4.0, "--outlier-z", help="Z-score threshold for outliers"),
+):
+    """
+    Compute Data Health Index (DSI) for assets (P1 feature).
+
+    DSI measures data quality based on:
+    - Missing data ratio
+    - Extreme outlier ratio
+    - Volume jump ratio
+
+    Examples:
+        otonom-trader compute-dsi
+        otonom-trader compute-dsi --symbol BTC-USD
+        otonom-trader compute-dsi --window 90 --outlier-z 5.0
+    """
+    try:
+        from .analytics.dsi import (
+            compute_dsi_for_symbol,
+            compute_dsi_all_symbols,
+            persist_dsi,
+        )
+
+        typer.echo(f"Computing DSI (window={window}, outlier_z={outlier_z})")
+
+        with next(get_session()) as session:
+            if symbol:
+                # Single symbol
+                dsi_points = compute_dsi_for_symbol(
+                    session,
+                    symbol=symbol,
+                    window=window,
+                    outlier_z=outlier_z,
+                )
+                persist_dsi(session, dsi_points)
+
+                # Calculate statistics
+                if dsi_points:
+                    avg_dsi = sum(p.dsi for p in dsi_points) / len(dsi_points)
+                    min_dsi = min(p.dsi for p in dsi_points)
+                    max_dsi = max(p.dsi for p in dsi_points)
+
+                    typer.echo(f"\n{symbol}:")
+                    typer.echo(f"  Total points:  {len(dsi_points)}")
+                    typer.echo(f"  Average DSI:   {avg_dsi:.3f}")
+                    typer.echo(f"  Min DSI:       {min_dsi:.3f}")
+                    typer.echo(f"  Max DSI:       {max_dsi:.3f}")
+
+            else:
+                # All symbols
+                assets = get_p0_assets()
+                symbols = [a.symbol for a in assets]
+
+                results = compute_dsi_all_symbols(
+                    session,
+                    symbols=symbols,
+                    window=window,
+                    outlier_z=outlier_z,
+                )
+
+                # Persist all
+                total_points = 0
+                typer.echo("\nResults:")
+
+                for sym, dsi_points in results.items():
+                    if dsi_points:
+                        persist_dsi(session, dsi_points)
+                        avg_dsi = sum(p.dsi for p in dsi_points) / len(dsi_points)
+                        total_points += len(dsi_points)
+                        typer.echo(
+                            f"  {sym:>10}: {len(dsi_points):>4} points, "
+                            f"avg DSI={avg_dsi:.3f}"
+                        )
+                    else:
+                        typer.echo(f"  {sym:>10}: No data")
+
+                typer.echo(f"\nTotal: {total_points} DSI points computed")
+
+    except Exception as e:
+        typer.echo(f"✗ Error computing DSI: {e}", err=True)
+        logger.exception("DSI computation failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def list_dsi(
+    symbol: Optional[str] = typer.Option(None, "--symbol", help="Filter by symbol"),
+    limit: int = typer.Option(20, "--limit", help="Maximum number to display"),
+    min_dsi: Optional[float] = typer.Option(
+        None, "--min-dsi", help="Show only records with DSI >= this value"
+    ),
+):
+    """
+    List computed DSI values (P1 feature).
+
+    Examples:
+        otonom-trader list-dsi
+        otonom-trader list-dsi --symbol BTC-USD --limit 10
+        otonom-trader list-dsi --min-dsi 0.8
+    """
+    try:
+        from .data.schema import DataHealthIndex as DsiORM
+
+        with next(get_session()) as session:
+            query = session.query(DsiORM, Symbol.symbol).join(Symbol)
+
+            if symbol:
+                query = query.filter(Symbol.symbol == symbol)
+
+            if min_dsi is not None:
+                query = query.filter(DsiORM.dsi >= min_dsi)
+
+            query = query.order_by(DsiORM.date.desc()).limit(limit)
+            results = query.all()
+
+        if not results:
+            typer.echo("No DSI records found")
+            return
+
+        # Display
+        typer.echo("Date       | Symbol     | DSI   | Missing | Outlier | Vol Jump")
+        typer.echo("-" * 75)
+
+        for d, sym in results:
+            typer.echo(
+                f"{d.date} | {sym:>10} | {d.dsi:.3f} | "
+                f"{d.missing_ratio:.3f}   | {d.outlier_ratio:.3f}   | "
+                f"{d.volume_jump_ratio:.3f}"
+            )
+
+        typer.echo(f"\nShowing {len(results)} DSI records")
+
+    except Exception as e:
+        typer.echo(f"✗ Error listing DSI: {e}", err=True)
+        logger.exception("List DSI failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def status():
     """
     Show database status and statistics.
     """
     try:
-        from .data.schema import Regime as RegimeORM
+        from .data.schema import Regime as RegimeORM, DataHealthIndex as DsiORM
 
         with next(get_session()) as session:
             # Count symbols
@@ -531,6 +674,9 @@ def status():
             # Count regimes (P1)
             regime_count = session.query(RegimeORM).count()
 
+            # Count DSI records (P1)
+            dsi_count = session.query(DsiORM).count()
+
             typer.echo("Database Status")
             typer.echo("=" * 40)
             typer.echo(f"Symbols:   {symbol_count:>6}")
@@ -538,6 +684,7 @@ def status():
             typer.echo(f"Anomalies: {anomaly_count:>6}")
             typer.echo(f"Decisions: {decision_count:>6}")
             typer.echo(f"Regimes:   {regime_count:>6}  [P1]")
+            typer.echo(f"DSI:       {dsi_count:>6}  [P1]")
 
     except Exception as e:
         typer.echo(f"✗ Error getting status: {e}", err=True)
