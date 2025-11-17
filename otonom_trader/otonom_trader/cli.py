@@ -254,21 +254,28 @@ def list_anomalies(
 @app.command()
 def run_patron(
     days: int = typer.Option(30, "--days", help="Look back N days for anomalies"),
+    ensemble: bool = typer.Option(False, "--ensemble", help="Use ensemble mode (P1)"),
 ):
     """
     Run Patron decision engine on recent anomalies.
 
     Generates BUY/SELL/HOLD signals based on anomaly + trend analysis.
 
+    P1 Feature: --ensemble flag enables multi-analyst consensus with disagreement tracking.
+
     Examples:
         otonom-trader run-patron
         otonom-trader run-patron --days 60
+        otonom-trader run-patron --ensemble  # P1: weighted ensemble mode
     """
     try:
-        typer.echo(f"Running Patron on anomalies from last {days} days...")
+        if ensemble:
+            typer.echo(f"Running Patron (ENSEMBLE MODE) on anomalies from last {days} days...")
+        else:
+            typer.echo(f"Running Patron on anomalies from last {days} days...")
 
         with next(get_session()) as session:
-            results = run_daily_decision_pass(session, days_back=days)
+            results = run_daily_decision_pass(session, days_back=days, use_ensemble=ensemble)
 
         if not results:
             typer.echo("No decisions generated (no recent anomalies found)")

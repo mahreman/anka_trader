@@ -170,8 +170,127 @@ def make_decision_for_anomaly(
     return decision
 
 
+def make_ensemble_decision_for_anomaly(
+    session: Session,
+    anomaly: AnomalyDomain,
+    use_ensemble: bool = True,
+    persist: bool = True,
+) -> DecisionDomain:
+    """
+    Generate trading decision using ensemble of analysts (P1 feature).
+
+    This is an enhanced version of make_decision_for_anomaly that:
+    1. Gets signal from technical analyst (existing rules)
+    2. Gets signal from other analysts (news, macro - stub for P1)
+    3. Combines them using weighted ensemble
+    4. Applies disagreement penalty
+
+    Args:
+        session: Database session
+        anomaly: Anomaly domain object
+        use_ensemble: If True, uses ensemble; if False, falls back to basic rules
+        persist: Whether to save decision to database
+
+    Returns:
+        Decision domain object with ensemble-enhanced confidence
+
+    Example:
+        >>> # With ensemble
+        >>> decision = make_ensemble_decision_for_anomaly(session, anomaly, use_ensemble=True)
+        >>> # Confidence adjusted based on analyst disagreement
+    """
+    from .ensemble import AnalystSignal, combine_signals, apply_disagreement_penalty
+
+    # Get basic technical analysis (existing rules)
+    base_decision = make_decision_for_anomaly(session, anomaly, persist=False)
+
+    if not use_ensemble:
+        # Fallback to basic rules
+        if persist:
+            # Persist the basic decision
+            symbol_obj = session.query(Symbol).filter_by(symbol=anomaly.asset_symbol).first()
+            if symbol_obj:
+                decision_orm = DecisionORM(
+                    symbol_id=symbol_obj.id,
+                    date=base_decision.date,
+                    signal=str(base_decision.signal),
+                    confidence=base_decision.confidence,
+                    reason=base_decision.reason,
+                )
+                session.add(decision_orm)
+                session.commit()
+        return base_decision
+
+    # P1: Build ensemble of analysts
+    signals = []
+
+    # Technical analyst (from existing rules)
+    tech_direction = base_decision.signal.value
+    # Approximate p_up from signal and confidence
+    if tech_direction == "BUY":
+        tech_p_up = 0.5 + base_decision.confidence / 2.0
+    elif tech_direction == "SELL":
+        tech_p_up = 0.5 - base_decision.confidence / 2.0
+    else:
+        tech_p_up = 0.5
+
+    signals.append(
+        AnalystSignal(
+            name="Technical",
+            direction=tech_direction,
+            p_up=tech_p_up,
+            confidence=base_decision.confidence,
+            weight=1.0,
+        )
+    )
+
+    # TODO P2: Add news analyst
+    # TODO P2: Add macro analyst
+    # For now, we only have technical, so ensemble just wraps it
+
+    # Combine signals
+    ensemble = combine_signals(signals)
+
+    # Apply disagreement penalty
+    adjusted_confidence = apply_disagreement_penalty(
+        base_decision.confidence,
+        ensemble.disagreement,
+        threshold=0.5,
+    )
+
+    # Create enhanced decision
+    enhanced_reason = (
+        base_decision.reason
+        + f"\n[Ensemble: p_up={ensemble.p_up:.2f}, disagreement={ensemble.disagreement:.2f}]"
+    )
+
+    decision = DecisionDomain(
+        asset_symbol=anomaly.asset_symbol,
+        date=anomaly.date,
+        signal=base_decision.signal,  # Keep same signal
+        confidence=adjusted_confidence,  # Adjusted by disagreement
+        reason=enhanced_reason,
+    )
+
+    # Persist
+    if persist:
+        symbol_obj = session.query(Symbol).filter_by(symbol=anomaly.asset_symbol).first()
+        if symbol_obj:
+            decision_orm = DecisionORM(
+                symbol_id=symbol_obj.id,
+                date=decision.date,
+                signal=str(decision.signal),
+                confidence=decision.confidence,
+                reason=decision.reason,
+            )
+            session.add(decision_orm)
+            session.commit()
+
+    return decision
+
+
 def run_daily_decision_pass(
-    session: Session, days_back: int = 30
+    session: Session, days_back: int = 30, use_ensemble: bool = False
 ) -> dict[str, List[DecisionDomain]]:
     """
     Run Patron decision engine on recent anomalies.
@@ -179,11 +298,14 @@ def run_daily_decision_pass(
     Args:
         session: Database session
         days_back: Number of days to look back for anomalies
+        use_ensemble: If True, uses ensemble mode (P1 feature)
 
     Returns:
         Dictionary mapping symbol to list of decisions
     """
     logger.info(f"Running Patron decision pass for last {days_back} days")
+    if use_ensemble:
+        logger.info("Using ensemble mode (P1)")
 
     cutoff_date = date.today() - timedelta(days=days_back)
 
@@ -214,7 +336,12 @@ def run_daily_decision_pass(
 
         # Generate decision
         try:
-            decision = make_decision_for_anomaly(session, anomaly, persist=True)
+            if use_ensemble:
+                decision = make_ensemble_decision_for_anomaly(
+                    session, anomaly, use_ensemble=True, persist=True
+                )
+            else:
+                decision = make_decision_for_anomaly(session, anomaly, persist=True)
 
             if symbol not in results:
                 results[symbol] = []
