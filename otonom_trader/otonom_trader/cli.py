@@ -851,6 +851,111 @@ def show_backtest(
 
 
 @app.command()
+def backtest_portfolio(
+    hypothesis_id: Optional[int] = typer.Option(None, "--id", help="Hypothesis ID"),
+    name: Optional[str] = typer.Option(None, "--name", help="Hypothesis name"),
+    initial_cash: float = typer.Option(100000.0, "--initial-cash", help="Initial cash balance"),
+    risk_pct: float = typer.Option(1.0, "--risk-pct", help="Risk per trade (% of equity)"),
+):
+    """
+    Run portfolio-based backtest on hypothesis results (P2.5 feature).
+
+    Replays event-based backtest trades with position sizing and portfolio tracking.
+
+    Examples:
+        otonom-trader backtest-portfolio --id 1
+        otonom-trader backtest-portfolio --name "P1_smoke"
+        otonom-trader backtest-portfolio --id 1 --initial-cash 50000 --risk-pct 2.0
+    """
+    try:
+        from .eval.backtest_portfolio import (
+            PortfolioConfig,
+            run_portfolio_backtest,
+            get_portfolio_summary,
+        )
+        from .data.schema import Hypothesis
+
+        # Find hypothesis
+        with next(get_session()) as session:
+            if hypothesis_id is None and name is None:
+                typer.echo("✗ Error: Must specify either --id or --name", err=True)
+                raise typer.Exit(code=1)
+
+            if hypothesis_id:
+                hypothesis = (
+                    session.query(Hypothesis)
+                    .filter(Hypothesis.id == hypothesis_id)
+                    .one_or_none()
+                )
+            else:
+                hypothesis = (
+                    session.query(Hypothesis)
+                    .filter(Hypothesis.name == name)
+                    .one_or_none()
+                )
+
+            if hypothesis is None:
+                if hypothesis_id:
+                    typer.echo(f"✗ Error: Hypothesis ID {hypothesis_id} not found", err=True)
+                else:
+                    typer.echo(f"✗ Error: Hypothesis '{name}' not found", err=True)
+                raise typer.Exit(code=1)
+
+            typer.echo(f"[P2.5] Running portfolio backtest for: {hypothesis.name}")
+            typer.echo(f"Initial cash: ${initial_cash:,.2f}")
+            typer.echo(f"Risk per trade: {risk_pct}% of equity")
+            typer.echo("")
+
+            # Configure portfolio
+            config = PortfolioConfig(
+                initial_cash=initial_cash,
+                risk_per_trade_pct=risk_pct,
+            )
+
+            # Run backtest
+            metrics = run_portfolio_backtest(
+                session,
+                hypothesis_id=hypothesis.id,
+                config=config,
+            )
+
+            # Display results
+            typer.echo("\n" + "=" * 60)
+            typer.echo("PORTFOLIO BACKTEST RESULTS")
+            typer.echo("=" * 60)
+            typer.echo(f"Total trades:     {metrics.total_trades}")
+            typer.echo(f"Win rate:         {metrics.win_rate * 100:.2f}%")
+            typer.echo("")
+            typer.echo(f"Initial equity:   ${config.initial_cash:,.2f}")
+            typer.echo(f"Final equity:     ${metrics.final_equity:,.2f}")
+            typer.echo(f"Total PnL:        ${metrics.total_pnl:+,.2f}")
+            typer.echo(
+                f"Return:           {((metrics.final_equity - config.initial_cash) / config.initial_cash * 100):+.2f}%"
+            )
+            typer.echo("")
+            typer.echo(f"Max drawdown:     {metrics.max_drawdown * 100:.2f}%")
+            typer.echo("")
+
+            if metrics.total_trades > 0:
+                typer.echo(f"Average win:      ${metrics.avg_win:,.2f}")
+                typer.echo(f"Average loss:     ${metrics.avg_loss:,.2f}")
+                if metrics.avg_loss != 0:
+                    profit_factor = abs(metrics.avg_win / metrics.avg_loss)
+                    typer.echo(f"Profit factor:    {profit_factor:.2f}")
+
+            typer.echo("=" * 60)
+
+            # Commit snapshots
+            session.commit()
+            typer.echo("\n✓ Portfolio backtest completed")
+
+    except Exception as e:
+        typer.echo(f"✗ Error running portfolio backtest: {e}", err=True)
+        logger.exception("Portfolio backtest failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def status():
     """
     Show database status and statistics.
