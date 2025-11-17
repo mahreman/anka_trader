@@ -331,3 +331,35 @@ class DaemonRun(Base):
 
     def __repr__(self) -> str:
         return f"<DaemonRun(id={self.id}, timestamp={self.timestamp}, status={self.status})>"
+
+
+class PortfolioSnapshot(Base):
+    """
+    Portfolio state snapshot at a given timestamp.
+
+    P3 feature: Tracks equity, cash, and drawdown for performance monitoring.
+    """
+
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_timestamp", "timestamp"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+
+    # Portfolio metrics
+    equity = Column(Float, nullable=False)  # Total portfolio value (cash + positions)
+    cash = Column(Float, nullable=False)  # Available cash
+    positions_value = Column(Float, nullable=False)  # Total value of positions
+    num_positions = Column(Integer, nullable=False, default=0)  # Number of open positions
+
+    # Performance metrics
+    max_drawdown = Column(Float, nullable=True)  # Max drawdown from peak (as fraction)
+    max_equity = Column(Float, nullable=True)  # Maximum equity achieved so far
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        dd_str = f"{self.max_drawdown:.2%}" if self.max_drawdown else "N/A"
+        return f"<PortfolioSnapshot(ts={self.timestamp}, equity=${self.equity:.2f}, dd={dd_str})>"

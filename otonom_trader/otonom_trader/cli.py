@@ -989,21 +989,27 @@ def ingest_incremental(
 
 
 @app.command()
-def run_daemon(
+def daemon_once(
     initial_cash: float = typer.Option(100000.0, "--initial-cash", help="Initial cash balance"),
     risk_pct: float = typer.Option(1.0, "--risk-pct", help="Risk per trade (%)"),
-    ensemble: bool = typer.Option(False, "--ensemble", help="Use ensemble mode"),
+    ensemble: bool = typer.Option(True, "--ensemble/--no-ensemble", help="Use ensemble mode (default: True)"),
     no_trade: bool = typer.Option(False, "--no-trade", help="Disable paper trading"),
 ):
     """
     Run a single daemon cycle (P3 feature).
 
-    Full pipeline: ingest → anomaly detection → patron → paper trading
+    Full pipeline: ingest → anomaly → patron → paper trade → snapshot
+
+    Perfect for cron jobs: runs once and exits.
 
     Examples:
-        otonom-trader run-daemon
-        otonom-trader run-daemon --ensemble --risk-pct 2.0
-        otonom-trader run-daemon --no-trade  # Analysis only
+        otonom-trader daemon-once                        # Default: ensemble + paper trading
+        otonom-trader daemon-once --risk-pct 2.0         # Higher risk
+        otonom-trader daemon-once --no-trade             # Analysis only
+        otonom-trader daemon-once --no-ensemble          # Disable ensemble
+
+    Cron example (every 15 minutes):
+        */15 * * * * cd /path/to/project && otonom-trader daemon-once
     """
     try:
         from .daemon import run_daemon_cycle, DaemonConfig, get_or_create_paper_trader
@@ -1041,6 +1047,100 @@ def run_daemon(
     except Exception as e:
         typer.echo(f"✗ Error: {e}", err=True)
         logger.exception("Daemon failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def daemon_loop(
+    interval: int = typer.Option(900, "--interval", help="Interval between cycles (seconds)"),
+    initial_cash: float = typer.Option(100000.0, "--initial-cash", help="Initial cash balance"),
+    risk_pct: float = typer.Option(1.0, "--risk-pct", help="Risk per trade (%)"),
+    ensemble: bool = typer.Option(True, "--ensemble/--no-ensemble", help="Use ensemble mode"),
+    no_trade: bool = typer.Option(False, "--no-trade", help="Disable paper trading"),
+):
+    """
+    Run daemon in continuous loop mode (P3 feature).
+
+    Runs indefinitely with specified interval between cycles.
+    Use Ctrl+C to stop.
+
+    Examples:
+        otonom-trader daemon-loop                        # Every 15 minutes (900s)
+        otonom-trader daemon-loop --interval 3600        # Every hour
+        otonom-trader daemon-loop --interval 300         # Every 5 minutes
+        otonom-trader daemon-loop --no-trade             # Analysis only
+
+    Note: For production, prefer cron + daemon-once for better reliability.
+    """
+    import time as time_module
+
+    try:
+        from .daemon import run_daemon_cycle, DaemonConfig, get_or_create_paper_trader
+
+        typer.echo("=" * 60)
+        typer.echo("Starting daemon in LOOP mode")
+        typer.echo(f"Interval: {interval}s ({interval//60} minutes)")
+        typer.echo(f"Initial cash: ${initial_cash:,.2f}")
+        typer.echo(f"Risk per trade: {risk_pct}%")
+        typer.echo(f"Ensemble mode: {'ON' if ensemble else 'OFF'}")
+        typer.echo(f"Paper trading: {'OFF' if no_trade else 'ON'}")
+        typer.echo("\nPress Ctrl+C to stop")
+        typer.echo("=" * 60)
+        typer.echo("")
+
+        # Configure daemon
+        config = DaemonConfig(
+            use_ensemble=ensemble,
+            paper_trade_enabled=not no_trade,
+            paper_trade_risk_pct=risk_pct,
+            initial_cash=initial_cash,
+        )
+
+        cycle_count = 0
+
+        while True:
+            cycle_count += 1
+            typer.echo(f"\n{'='*60}")
+            typer.echo(f"Cycle #{cycle_count} starting...")
+            typer.echo(f"{'='*60}")
+
+            try:
+                with next(get_session()) as session:
+                    # Get or create paper trader
+                    paper_trader = None
+                    if not no_trade:
+                        paper_trader = get_or_create_paper_trader(session, initial_cash)
+
+                    # Run cycle
+                    run = run_daemon_cycle(session, config, paper_trader)
+
+                    if run.status == "SUCCESS":
+                        typer.echo(f"\n✓ Cycle #{cycle_count} completed successfully")
+                    else:
+                        typer.echo(f"\n✗ Cycle #{cycle_count} failed: {run.error_message}", err=True)
+
+            except KeyboardInterrupt:
+                typer.echo("\n\nReceived interrupt signal, stopping daemon...")
+                break
+            except Exception as e:
+                typer.echo(f"\n✗ Cycle #{cycle_count} error: {e}", err=True)
+                logger.exception(f"Cycle #{cycle_count} failed")
+
+            # Wait for next cycle
+            typer.echo(f"\nWaiting {interval}s until next cycle...")
+            try:
+                time_module.sleep(interval)
+            except KeyboardInterrupt:
+                typer.echo("\n\nReceived interrupt signal, stopping daemon...")
+                break
+
+        typer.echo(f"\nDaemon stopped after {cycle_count} cycles")
+
+    except KeyboardInterrupt:
+        typer.echo("\n\nDaemon stopped by user")
+    except Exception as e:
+        typer.echo(f"✗ Fatal error: {e}", err=True)
+        logger.exception("Daemon loop failed")
         raise typer.Exit(code=1)
 
 
@@ -1143,9 +1243,16 @@ def daemon_status(
 @app.command()
 def status():
     """
-    Show database status and statistics.
+    Show database status and health check (P3 enhanced).
+
+    Displays:
+    - Database statistics (total counts)
+    - Recent activity (last 24 hours)
+    - Portfolio performance
+    - Daemon health check
     """
     try:
+        from datetime import datetime, timedelta
         from .data.schema import (
             Regime as RegimeORM,
             DataHealthIndex as DsiORM,
@@ -1153,49 +1260,144 @@ def status():
             HypothesisResult,
             PaperTrade,
             DaemonRun,
+            PortfolioSnapshot,
+            DailyBar,
         )
 
         with next(get_session()) as session:
-            # Count symbols
+            # ===== DATABASE STATISTICS =====
+            typer.echo("=" * 60)
+            typer.echo("DATABASE STATUS")
+            typer.echo("=" * 60)
+
             symbol_count = session.query(Symbol).count()
-
-            # Count bars
-            from .data.schema import DailyBar
-
             bar_count = session.query(DailyBar).count()
-
-            # Count anomalies
             anomaly_count = session.query(AnomalyORM).count()
-
-            # Count decisions
             decision_count = session.query(DecisionORM).count()
-
-            # Count regimes (P1)
             regime_count = session.query(RegimeORM).count()
-
-            # Count DSI records (P1)
             dsi_count = session.query(DsiORM).count()
-
-            # Count hypotheses and results (P1)
             hypothesis_count = session.query(Hypothesis).count()
             backtest_count = session.query(HypothesisResult).count()
-
-            # Count paper trades and daemon runs (P3)
             paper_trades_count = session.query(PaperTrade).count()
             daemon_runs_count = session.query(DaemonRun).count()
+            snapshots_count = session.query(PortfolioSnapshot).count()
 
-            typer.echo("Database Status")
-            typer.echo("=" * 40)
-            typer.echo(f"Symbols:      {symbol_count:>6}")
-            typer.echo(f"Bars:         {bar_count:>6}")
-            typer.echo(f"Anomalies:    {anomaly_count:>6}")
-            typer.echo(f"Decisions:    {decision_count:>6}")
-            typer.echo(f"Regimes:      {regime_count:>6}  [P1]")
-            typer.echo(f"DSI:          {dsi_count:>6}  [P1]")
-            typer.echo(f"Hypotheses:   {hypothesis_count:>6}  [P1]")
-            typer.echo(f"Backtests:    {backtest_count:>6}  [P1]")
-            typer.echo(f"Paper Trades: {paper_trades_count:>6}  [P3]")
-            typer.echo(f"Daemon Runs:  {daemon_runs_count:>6}  [P3]")
+            typer.echo(f"Symbols:            {symbol_count:>8}")
+            typer.echo(f"Bars:               {bar_count:>8}")
+            typer.echo(f"Anomalies:          {anomaly_count:>8}")
+            typer.echo(f"Decisions:          {decision_count:>8}")
+            typer.echo(f"Regimes:            {regime_count:>8}  [P1]")
+            typer.echo(f"DSI:                {dsi_count:>8}  [P1]")
+            typer.echo(f"Hypotheses:         {hypothesis_count:>8}  [P1]")
+            typer.echo(f"Backtests:          {backtest_count:>8}  [P1]")
+            typer.echo(f"Paper Trades:       {paper_trades_count:>8}  [P3]")
+            typer.echo(f"Daemon Runs:        {daemon_runs_count:>8}  [P3]")
+            typer.echo(f"Portfolio Snapshots:{snapshots_count:>8}  [P3]")
+
+            # ===== 24-HOUR ACTIVITY =====
+            typer.echo("\n" + "=" * 60)
+            typer.echo("LAST 24 HOURS")
+            typer.echo("=" * 60)
+
+            now = datetime.utcnow()
+            yesterday = now - timedelta(hours=24)
+
+            # Bars ingested
+            recent_bars = (
+                session.query(DailyBar)
+                .filter(DailyBar.date >= yesterday.date())
+                .count()
+            )
+
+            # Anomalies detected
+            recent_anomalies = (
+                session.query(AnomalyORM)
+                .filter(AnomalyORM.created_at >= yesterday)
+                .count()
+            )
+
+            # Decisions made
+            recent_decisions = (
+                session.query(DecisionORM)
+                .filter(DecisionORM.created_at >= yesterday)
+                .count()
+            )
+
+            # Daemon runs
+            recent_runs = (
+                session.query(DaemonRun)
+                .filter(DaemonRun.timestamp >= yesterday)
+                .count()
+            )
+
+            # Successful runs
+            successful_runs = (
+                session.query(DaemonRun)
+                .filter(DaemonRun.timestamp >= yesterday, DaemonRun.status == "SUCCESS")
+                .count()
+            )
+
+            # Paper trades
+            recent_trades = (
+                session.query(PaperTrade)
+                .filter(PaperTrade.timestamp >= yesterday)
+                .count()
+            )
+
+            health_status = "✓ HEALTHY" if successful_runs >= recent_runs * 0.9 else "⚠ WARNING"
+
+            typer.echo(f"Bars ingested:      {recent_bars:>8}")
+            typer.echo(f"Anomalies detected: {recent_anomalies:>8}")
+            typer.echo(f"Decisions made:     {recent_decisions:>8}")
+            typer.echo(f"Daemon runs:        {recent_runs:>8}  ({successful_runs} successful)")
+            typer.echo(f"Paper trades:       {recent_trades:>8}")
+            typer.echo(f"\nHealth status:      {health_status}")
+
+            # ===== PORTFOLIO PERFORMANCE =====
+            if snapshots_count > 0:
+                typer.echo("\n" + "=" * 60)
+                typer.echo("PORTFOLIO PERFORMANCE")
+                typer.echo("=" * 60)
+
+                # Latest snapshot
+                latest_snapshot = (
+                    session.query(PortfolioSnapshot)
+                    .order_by(PortfolioSnapshot.timestamp.desc())
+                    .first()
+                )
+
+                if latest_snapshot:
+                    typer.echo(f"Latest update:      {latest_snapshot.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                    typer.echo(f"Total equity:       ${latest_snapshot.equity:>12,.2f}")
+                    typer.echo(f"Cash:               ${latest_snapshot.cash:>12,.2f}")
+                    typer.echo(f"Positions value:    ${latest_snapshot.positions_value:>12,.2f}")
+                    typer.echo(f"Number of positions:{latest_snapshot.num_positions:>8}")
+
+                    if latest_snapshot.max_drawdown is not None:
+                        dd_str = f"{latest_snapshot.max_drawdown:.2%}"
+                        dd_status = "✓" if latest_snapshot.max_drawdown < 0.1 else "⚠"
+                        typer.echo(f"Max drawdown:       {dd_status} {dd_str:>10}")
+
+                    # Calculate performance over last N snapshots
+                    if snapshots_count >= 2:
+                        first_snapshot = (
+                            session.query(PortfolioSnapshot)
+                            .order_by(PortfolioSnapshot.timestamp.asc())
+                            .first()
+                        )
+
+                        total_return = (
+                            (latest_snapshot.equity - first_snapshot.equity)
+                            / first_snapshot.equity
+                        )
+                        total_return_pct = total_return * 100
+
+                        typer.echo(f"Total return:       {total_return_pct:>+12.2f}%")
+
+                        # Days tracked
+                        days_tracked = (latest_snapshot.timestamp - first_snapshot.timestamp).days
+                        if days_tracked > 0:
+                            typer.echo(f"Days tracked:       {days_tracked:>8}")
 
     except Exception as e:
         typer.echo(f"✗ Error getting status: {e}", err=True)

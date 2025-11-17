@@ -408,3 +408,67 @@ class PaperTrader:
                 for p in self.portfolio.positions.values()
             ],
         }
+
+    def create_portfolio_snapshot(self) -> "PortfolioSnapshot":
+        """
+        Create a portfolio snapshot and persist to database.
+
+        Returns:
+            PortfolioSnapshot record
+
+        Example:
+            >>> trader = PaperTrader(session)
+            >>> snapshot = trader.create_portfolio_snapshot()
+            >>> print(f"Equity: ${snapshot.equity:.2f}")
+        """
+        from ..data.schema import PortfolioSnapshot
+
+        # Update prices first
+        self.update_portfolio_prices()
+
+        # Get current metrics
+        equity = self.portfolio.total_value
+        cash = self.portfolio.cash
+        positions_value = self.portfolio.positions_value
+        num_positions = len(self.portfolio.positions)
+
+        # Calculate max drawdown
+        # Get all previous snapshots to find peak equity
+        previous_snapshots = (
+            self.session.query(PortfolioSnapshot)
+            .order_by(PortfolioSnapshot.timestamp.desc())
+            .all()
+        )
+
+        max_equity = equity
+        if previous_snapshots:
+            historical_max = max(s.equity for s in previous_snapshots)
+            max_equity = max(historical_max, equity)
+
+        # Calculate drawdown
+        if max_equity > 0:
+            drawdown = (max_equity - equity) / max_equity
+        else:
+            drawdown = 0.0
+
+        # Create snapshot
+        snapshot = PortfolioSnapshot(
+            timestamp=datetime.utcnow(),
+            equity=equity,
+            cash=cash,
+            positions_value=positions_value,
+            num_positions=num_positions,
+            max_drawdown=drawdown,
+            max_equity=max_equity,
+        )
+
+        self.session.add(snapshot)
+        self.session.commit()
+
+        logger.info(
+            f"Portfolio snapshot created: equity=${equity:,.2f}, "
+            f"cash=${cash:,.2f}, positions=${positions_value:,.2f}, "
+            f"drawdown={drawdown:.2%}"
+        )
+
+        return snapshot
