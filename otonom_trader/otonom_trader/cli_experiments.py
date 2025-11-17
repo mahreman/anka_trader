@@ -403,3 +403,224 @@ def show_experiment(
             except Exception as e:
                 console.print(f"[red]Failed to generate report: {e}[/red]")
                 logger.error(f"Report generation failed: {e}", exc_info=True)
+
+
+@app.command("ablation")
+def analyze_ablation_experiment(
+    experiment_id: int = typer.Argument(..., help="Ablation experiment ID"),
+    db: str = typer.Option("trader.db", "--db", help="Database path"),
+    export: str = typer.Option(None, "--export", help="Export to markdown/html file"),
+):
+    """
+    Analyze ablation experiment results.
+
+    Shows contribution of each analyst component.
+
+    Example:
+        otonom-trader experiments ablation 5
+        otonom-trader experiments ablation 5 --export reports/ablation.md
+    """
+    from .experiments.analysis import analyze_ablation, generate_comparison_table
+
+    with get_session(db) as session:
+        try:
+            console.print(f"[bold cyan]Analyzing ablation experiment {experiment_id}...[/bold cyan]\n")
+
+            results = analyze_ablation(session, experiment_id)
+
+            if not results:
+                console.print("[yellow]No ablation results found.[/yellow]")
+                return
+
+            # Print results
+            console.print("[bold]Ablation Analysis Results:[/bold]\n")
+
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Configuration")
+            table.add_column("Sharpe", justify="right")
+            table.add_column("CAGR", justify="right")
+            table.add_column("Max DD", justify="right")
+            table.add_column("Win Rate", justify="right")
+            table.add_column("Trades", justify="right")
+            table.add_column("Contribution", justify="right")
+
+            for r in results:
+                contrib_str = f"{r.contribution:+.2f}" if r.contribution else "baseline"
+                contrib_style = "green" if r.contribution and r.contribution > 0 else ("red" if r.contribution and r.contribution < 0 else "")
+
+                table.add_row(
+                    r.config_name,
+                    f"{r.test_sharpe:.2f}",
+                    f"{r.test_cagr:.1f}%",
+                    f"{r.test_max_dd:.1f}%",
+                    f"{r.test_win_rate:.1f}%",
+                    str(r.total_trades),
+                    f"[{contrib_style}]{contrib_str}[/{contrib_style}]" if contrib_style else contrib_str,
+                )
+
+            console.print(table)
+
+            # Export if requested
+            if export:
+                output_format = "markdown" if export.endswith(".md") else "html"
+                table_output = generate_comparison_table(results, output_format)
+
+                with open(export, "w") as f:
+                    f.write(table_output)
+
+                console.print(f"\n[bold green]✓ Report exported to:[/bold green] {export}")
+
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            logger.error(f"Ablation analysis failed: {e}", exc_info=True)
+            raise typer.Exit(code=1)
+
+
+@app.command("robustness")
+def analyze_robustness_experiment(
+    experiment_id: int = typer.Argument(..., help="Robustness experiment ID"),
+    db: str = typer.Option("trader.db", "--db", help="Database path"),
+    baseline_risk: float = typer.Option(1.0, "--baseline-risk", help="Baseline risk per trade %"),
+    baseline_sl: float = typer.Option(5.0, "--baseline-sl", help="Baseline stop-loss %"),
+    baseline_tp: float = typer.Option(10.0, "--baseline-tp", help="Baseline take-profit %"),
+    export: str = typer.Option(None, "--export", help="Export to markdown/html file"),
+):
+    """
+    Analyze robustness/sensitivity of parameters.
+
+    Shows how sensitive performance is to parameter changes.
+
+    Example:
+        otonom-trader experiments robustness 7 --baseline-risk 1.0 --baseline-sl 5.0
+        otonom-trader experiments robustness 7 --export reports/robustness.md
+    """
+    from .experiments.analysis import analyze_robustness, generate_comparison_table
+
+    with get_session(db) as session:
+        try:
+            console.print(f"[bold cyan]Analyzing robustness experiment {experiment_id}...[/bold cyan]\n")
+
+            baseline_params = {
+                "risk_management.position_sizing.risk_per_trade_pct": baseline_risk,
+                "risk_management.stop_loss.percentage": baseline_sl,
+                "risk_management.take_profit.percentage": baseline_tp,
+            }
+
+            results = analyze_robustness(session, experiment_id, baseline_params)
+
+            if not results:
+                console.print("[yellow]No robustness results found.[/yellow]")
+                return
+
+            # Print results
+            console.print("[bold]Robustness Analysis Results:[/bold]\n")
+
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Parameter")
+            table.add_column("Baseline", justify="right")
+            table.add_column("Sharpe Range", justify="right")
+            table.add_column("Std Dev", justify="right")
+            table.add_column("Sensitivity", justify="right")
+            table.add_column("Status")
+
+            for r in results:
+                status = "✓ Robust" if r.is_robust() else "⚠ Fragile"
+                status_style = "green" if r.is_robust() else "yellow"
+
+                table.add_row(
+                    r.param_name.split(".")[-1],  # Show short name
+                    f"{r.baseline_value:.2f}",
+                    f"[{r.min_sharpe:.2f}, {r.max_sharpe:.2f}]",
+                    f"{r.std_sharpe:.2f}",
+                    f"{r.sensitivity:.2f}",
+                    f"[{status_style}]{status}[/{status_style}]",
+                )
+
+            console.print(table)
+
+            # Print summary
+            robust_count = sum(1 for r in results if r.is_robust())
+            console.print(f"\n[bold]Summary:[/bold]")
+            console.print(f"  Robust parameters: {robust_count}/{len(results)}")
+            console.print(f"  Fragile parameters: {len(results) - robust_count}/{len(results)}")
+
+            if robust_count == len(results):
+                console.print(f"  [green]✓ Strategy is robust across all tested parameters[/green]")
+            elif robust_count < len(results) / 2:
+                console.print(f"  [red]⚠ Strategy is fragile - high sensitivity to parameter changes[/red]")
+
+            # Export if requested
+            if export:
+                output_format = "markdown" if export.endswith(".md") else "html"
+                table_output = generate_comparison_table(results, output_format)
+
+                with open(export, "w") as f:
+                    f.write(table_output)
+
+                console.print(f"\n[bold green]✓ Report exported to:[/bold green] {export}")
+
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            logger.error(f"Robustness analysis failed: {e}", exc_info=True)
+            raise typer.Exit(code=1)
+
+
+@app.command("compare")
+def compare_experiments_cli(
+    experiment_ids: str = typer.Argument(..., help="Comma-separated experiment IDs (e.g., 1,2,3)"),
+    metric: str = typer.Option("test_sharpe", "--metric", help="Metric to compare"),
+    db: str = typer.Option("trader.db", "--db", help="Database path"),
+):
+    """
+    Compare multiple experiments.
+
+    Example:
+        otonom-trader experiments compare 1,2,3
+        otonom-trader experiments compare 1,2,3 --metric test_cagr
+    """
+    from .experiments.analysis import compare_experiments
+
+    # Parse experiment IDs
+    try:
+        exp_ids = [int(x.strip()) for x in experiment_ids.split(",")]
+    except ValueError:
+        console.print("[red]Invalid experiment IDs. Use comma-separated numbers (e.g., 1,2,3)[/red]")
+        raise typer.Exit(code=1)
+
+    with get_session(db) as session:
+        try:
+            console.print(f"[bold cyan]Comparing experiments: {exp_ids}[/bold cyan]\n")
+
+            df = compare_experiments(session, exp_ids, metric=metric)
+
+            if df.empty:
+                console.print("[yellow]No results to compare.[/yellow]")
+                return
+
+            # Print comparison table
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Exp ID", justify="right")
+            table.add_column("Name")
+            table.add_column(f"Best {metric}", justify="right")
+            table.add_column(f"Avg {metric}", justify="right")
+            table.add_column(f"Worst {metric}", justify="right")
+            table.add_column(f"Std {metric}", justify="right")
+            table.add_column("Runs", justify="right")
+
+            for _, row in df.iterrows():
+                table.add_row(
+                    str(row["experiment_id"]),
+                    row["experiment_name"],
+                    f"{row[f'best_{metric}']:.2f}",
+                    f"{row[f'avg_{metric}']:.2f}",
+                    f"{row[f'worst_{metric}']:.2f}",
+                    f"{row[f'std_{metric}']:.2f}",
+                    str(row["total_runs"]),
+                )
+
+            console.print(table)
+
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            logger.error(f"Comparison failed: {e}", exc_info=True)
+            raise typer.Exit(code=1)
