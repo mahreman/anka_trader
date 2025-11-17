@@ -6,6 +6,7 @@ Includes:
 - State builders for RL
 - Offline dataset generation
 - Behavior cloning (future)
+- LLM-based event analysis
 """
 
 from .rl_agent import RlAgent, RlAction, RlState
@@ -15,6 +16,7 @@ from .offline_dataset import (
     RlExperience,
     generate_offline_dataset,
 )
+from .llm_agent import analyze_events, EventOpinion, format_news_for_llm_prompt
 
 __all__ = [
     # RL Agent
@@ -28,4 +30,8 @@ __all__ = [
     "OfflineDatasetGenerator",
     "RlExperience",
     "generate_offline_dataset",
+    # LLM Agent
+    "analyze_events",
+    "EventOpinion",
+    "format_news_for_llm_prompt",
 ]
