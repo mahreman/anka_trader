@@ -1,4 +1,4 @@
-# Strategy Promotion Log
+# Strategy Evolution Log
 
 This document tracks all strategy versions and promotions.
 
@@ -15,7 +15,8 @@ A strategy must meet these criteria to be promoted:
 - Test Sharpe improvement ≥ 5%
 - Max DD degradation ≤ 5%
 
-### Regime Requirements
+### Robustness Requirements
+- Train/Test Sharpe ratio ≤ 1.5 (overfitting check)
 - Must not blow up in crisis periods (Sharpe > -1.0)
 - Should work across multiple regimes
 
@@ -44,5 +45,27 @@ A strategy must meet these criteria to be promoted:
 
 ## Promotion History
 
-(Promotions will be automatically added below)
+### baseline v1.0 (Initial Version) - 2025-11-17
 
+**Experiment**: N/A (Initial baseline)
+
+**Performance**: 
+- Test Sharpe: N/A
+- Test CAGR: N/A
+- Test MaxDD: N/A
+
+**Configuration**:
+- Risk per trade: 1.0%
+- Stop-loss: 5.0%
+- Take-profit: 10.0%
+- DSI threshold: 0.5
+- Tech weight: 1.0
+- News weight: 1.2
+- Macro weight: 0.8
+- RL weight: 0.0
+
+**Rationale**: Initial working version with multi-analyst ensemble (tech + news + macro)
+
+---
+
+<!-- New promotions will be added below by the promotion script -->
