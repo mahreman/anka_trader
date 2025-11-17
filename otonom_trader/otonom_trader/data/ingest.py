@@ -2,12 +2,13 @@
 Data ingestion - Fetch and store OHLCV data.
 """
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import pandas as pd
 import yfinance as yf
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from ..domain import Asset
 from .schema import Symbol, DailyBar
@@ -174,6 +175,94 @@ def ingest_all_assets(
             results[asset.symbol] = count
         except Exception as e:
             logger.error(f"Failed to ingest {asset.symbol}: {e}")
+            results[asset.symbol] = 0
+
+    return results
+
+
+def get_latest_bar_date(session: Session, symbol: str) -> Optional[date]:
+    """
+    Get the latest date for which we have data for a symbol.
+
+    Args:
+        session: Database session
+        symbol: Asset symbol
+
+    Returns:
+        Latest date or None if no data exists
+    """
+    symbol_obj = session.query(Symbol).filter_by(symbol=symbol).first()
+    if symbol_obj is None:
+        return None
+
+    latest = (
+        session.query(func.max(DailyBar.date))
+        .filter(DailyBar.symbol_id == symbol_obj.id)
+        .scalar()
+    )
+
+    return latest
+
+
+def ingest_incremental(
+    session: Session,
+    days_back: int = 7,
+    assets: Optional[list[Asset]] = None,
+) -> dict[str, int]:
+    """
+    Incremental data ingest: fetch only recent data.
+
+    For each asset:
+    - If data exists: fetch from latest_date to today
+    - If no data: fetch last N days
+
+    Args:
+        session: Database session
+        days_back: Number of days to look back if no data exists
+        assets: List of assets to ingest. If None, uses all P0 assets.
+
+    Returns:
+        Dictionary mapping symbol to number of bars ingested
+    """
+    if assets is None:
+        assets = get_p0_assets()
+
+    today = date.today()
+    results = {}
+
+    logger.info(f"Running incremental ingest (days_back={days_back})")
+
+    for asset in assets:
+        try:
+            # Get latest bar date
+            latest_date = get_latest_bar_date(session, asset.symbol)
+
+            if latest_date:
+                # We have data: fetch from latest_date to today
+                # Add 1 day to avoid re-fetching the same day
+                start = latest_date + timedelta(days=1)
+
+                # Skip if we're already up to date
+                if start > today:
+                    logger.info(f"{asset.symbol}: Already up to date")
+                    results[asset.symbol] = 0
+                    continue
+
+                logger.info(
+                    f"{asset.symbol}: Incremental update from {start} (latest was {latest_date})"
+                )
+            else:
+                # No data: fetch last N days
+                start = today - timedelta(days=days_back)
+                logger.info(f"{asset.symbol}: No existing data, fetching {days_back} days")
+
+            # Fetch and upsert
+            df = fetch_daily_ohlcv(asset, start, today)
+            count = upsert_daily_bars(df, asset, session)
+            results[asset.symbol] = count
+
+        except Exception as e:
+            logger.error(f"Failed incremental ingest for {asset.symbol}: {e}")
             results[asset.symbol] = 0
 
     return results

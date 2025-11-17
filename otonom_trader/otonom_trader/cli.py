@@ -17,7 +17,7 @@ from .config import (
 )
 from .data import get_engine, get_session, init_db
 from .data.symbols import get_p0_assets, get_asset_by_symbol
-from .data.ingest import ingest_all_assets
+from .data.ingest import ingest_all_assets, ingest_incremental
 from .data.utils import get_date_range
 from .data.schema import Anomaly as AnomalyORM, Decision as DecisionORM, Symbol
 from .analytics import detect_anomalies_all_assets
@@ -956,6 +956,190 @@ def backtest_portfolio(
 
 
 @app.command()
+def ingest_incremental(
+    days_back: int = typer.Option(7, "--days-back", help="Days to look back if no data"),
+):
+    """
+    Incremental data ingest - fetch only recent data (P3 feature).
+
+    Examples:
+        otonom-trader ingest-incremental
+        otonom-trader ingest-incremental --days-back 30
+    """
+    try:
+        typer.echo(f"Running incremental ingest (days_back={days_back})")
+
+        with next(get_session()) as session:
+            results = ingest_incremental(session, days_back=days_back)
+
+        # Display results
+        typer.echo("\nResults:")
+        for sym, count in results.items():
+            status = "✓" if count > 0 else "○"
+            typer.echo(f"  {status} {sym:>10}: {count:>5} bars")
+
+        total = sum(results.values())
+        typer.echo(f"\nTotal: {total} bars ingested")
+
+    except Exception as e:
+        typer.echo(f"✗ Error: {e}", err=True)
+        logger.exception("Incremental ingest failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def run_daemon(
+    initial_cash: float = typer.Option(100000.0, "--initial-cash", help="Initial cash balance"),
+    risk_pct: float = typer.Option(1.0, "--risk-pct", help="Risk per trade (%)"),
+    ensemble: bool = typer.Option(False, "--ensemble", help="Use ensemble mode"),
+    no_trade: bool = typer.Option(False, "--no-trade", help="Disable paper trading"),
+):
+    """
+    Run a single daemon cycle (P3 feature).
+
+    Full pipeline: ingest → anomaly detection → patron → paper trading
+
+    Examples:
+        otonom-trader run-daemon
+        otonom-trader run-daemon --ensemble --risk-pct 2.0
+        otonom-trader run-daemon --no-trade  # Analysis only
+    """
+    try:
+        from .daemon import run_daemon_cycle, DaemonConfig, get_or_create_paper_trader
+
+        typer.echo("Starting daemon cycle...")
+        typer.echo(f"Initial cash: ${initial_cash:,.2f}")
+        typer.echo(f"Risk per trade: {risk_pct}%")
+        typer.echo(f"Ensemble mode: {'ON' if ensemble else 'OFF'}")
+        typer.echo(f"Paper trading: {'OFF' if no_trade else 'ON'}")
+        typer.echo("")
+
+        # Configure daemon
+        config = DaemonConfig(
+            use_ensemble=ensemble,
+            paper_trade_enabled=not no_trade,
+            paper_trade_risk_pct=risk_pct,
+            initial_cash=initial_cash,
+        )
+
+        with next(get_session()) as session:
+            # Get or create paper trader
+            paper_trader = None
+            if not no_trade:
+                paper_trader = get_or_create_paper_trader(session, initial_cash)
+
+            # Run daemon cycle
+            run = run_daemon_cycle(session, config, paper_trader)
+
+            if run.status == "SUCCESS":
+                typer.echo("\n✓ Daemon cycle completed successfully")
+            else:
+                typer.echo(f"\n✗ Daemon cycle failed: {run.error_message}", err=True)
+                raise typer.Exit(code=1)
+
+    except Exception as e:
+        typer.echo(f"✗ Error: {e}", err=True)
+        logger.exception("Daemon failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def show_paper_trades(
+    limit: int = typer.Option(20, "--limit", help="Maximum number to display"),
+    symbol: Optional[str] = typer.Option(None, "--symbol", help="Filter by symbol"),
+):
+    """
+    Show paper trading execution log (P3 feature).
+
+    Examples:
+        otonom-trader show-paper-trades
+        otonom-trader show-paper-trades --limit 50
+        otonom-trader show-paper-trades --symbol BTC-USD
+    """
+    try:
+        from .data.schema import PaperTrade
+
+        with next(get_session()) as session:
+            query = session.query(PaperTrade, Symbol.symbol).join(Symbol)
+
+            if symbol:
+                query = query.filter(Symbol.symbol == symbol)
+
+            query = query.order_by(PaperTrade.timestamp.desc()).limit(limit)
+            results = query.all()
+
+        if not results:
+            typer.echo("No paper trades found")
+            return
+
+        # Display
+        typer.echo("Timestamp           | Symbol     | Action | Quantity  | Price     | Value      | Portfolio")
+        typer.echo("-" * 100)
+
+        for t, sym in results:
+            typer.echo(
+                f"{t.timestamp.strftime('%Y-%m-%d %H:%M:%S')} | {sym:>10} | {t.action:>6} | "
+                f"{t.quantity:>9.4f} | ${t.price:>8.2f} | ${t.value:>9.2f} | ${t.portfolio_value:>12,.2f}"
+            )
+
+        typer.echo(f"\nShowing {len(results)} paper trades")
+
+    except Exception as e:
+        typer.echo(f"✗ Error: {e}", err=True)
+        logger.exception("Show paper trades failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def daemon_status(
+    limit: int = typer.Option(10, "--limit", help="Maximum number to display"),
+):
+    """
+    Show daemon execution history (P3 feature).
+
+    Examples:
+        otonom-trader daemon-status
+        otonom-trader daemon-status --limit 20
+    """
+    try:
+        from .data.schema import DaemonRun
+
+        with next(get_session()) as session:
+            runs = (
+                session.query(DaemonRun)
+                .order_by(DaemonRun.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+
+        if not runs:
+            typer.echo("No daemon runs found")
+            return
+
+        # Display
+        typer.echo("Timestamp           | Status  | Bars | Anomalies | Decisions | Trades | Duration | Portfolio")
+        typer.echo("-" * 110)
+
+        for r in runs:
+            portfolio_str = f"${r.portfolio_value:>10,.2f}" if r.portfolio_value else "N/A".ljust(13)
+            duration_str = f"{r.duration_seconds:.1f}s" if r.duration_seconds else "N/A"
+
+            typer.echo(
+                f"{r.timestamp.strftime('%Y-%m-%d %H:%M:%S')} | {r.status:>7} | "
+                f"{r.bars_ingested:>4} | {r.anomalies_detected:>9} | "
+                f"{r.decisions_made:>9} | {r.trades_executed:>6} | "
+                f"{duration_str:>8} | {portfolio_str}"
+            )
+
+        typer.echo(f"\nShowing {len(runs)} daemon runs")
+
+    except Exception as e:
+        typer.echo(f"✗ Error: {e}", err=True)
+        logger.exception("Daemon status failed")
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def status():
     """
     Show database status and statistics.
@@ -966,6 +1150,8 @@ def status():
             DataHealthIndex as DsiORM,
             Hypothesis,
             HypothesisResult,
+            PaperTrade,
+            DaemonRun,
         )
 
         with next(get_session()) as session:
@@ -993,16 +1179,22 @@ def status():
             hypothesis_count = session.query(Hypothesis).count()
             backtest_count = session.query(HypothesisResult).count()
 
+            # Count paper trades and daemon runs (P3)
+            paper_trades_count = session.query(PaperTrade).count()
+            daemon_runs_count = session.query(DaemonRun).count()
+
             typer.echo("Database Status")
             typer.echo("=" * 40)
-            typer.echo(f"Symbols:    {symbol_count:>6}")
-            typer.echo(f"Bars:       {bar_count:>6}")
-            typer.echo(f"Anomalies:  {anomaly_count:>6}")
-            typer.echo(f"Decisions:  {decision_count:>6}")
-            typer.echo(f"Regimes:    {regime_count:>6}  [P1]")
-            typer.echo(f"DSI:        {dsi_count:>6}  [P1]")
-            typer.echo(f"Hypotheses: {hypothesis_count:>6}  [P1]")
-            typer.echo(f"Backtests:  {backtest_count:>6}  [P1]")
+            typer.echo(f"Symbols:      {symbol_count:>6}")
+            typer.echo(f"Bars:         {bar_count:>6}")
+            typer.echo(f"Anomalies:    {anomaly_count:>6}")
+            typer.echo(f"Decisions:    {decision_count:>6}")
+            typer.echo(f"Regimes:      {regime_count:>6}  [P1]")
+            typer.echo(f"DSI:          {dsi_count:>6}  [P1]")
+            typer.echo(f"Hypotheses:   {hypothesis_count:>6}  [P1]")
+            typer.echo(f"Backtests:    {backtest_count:>6}  [P1]")
+            typer.echo(f"Paper Trades: {paper_trades_count:>6}  [P3]")
+            typer.echo(f"Daemon Runs:  {daemon_runs_count:>6}  [P3]")
 
     except Exception as e:
         typer.echo(f"✗ Error getting status: {e}", err=True)
