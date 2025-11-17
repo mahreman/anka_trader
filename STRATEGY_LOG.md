@@ -1,68 +1,48 @@
-# Strategy Evolution Log
+# Strategy Promotion Log
 
-Track of all strategy versions and their evolution over time.
+This document tracks all strategy versions and promotions.
 
-## Purpose
+## Promotion Criteria
 
-This log documents:
-- Strategy version changes
-- Parameter modifications
-- Experiment results that motivated changes
-- Expected vs. actual performance impact
+A strategy must meet these criteria to be promoted:
 
-## Template
+### Absolute Requirements
+- Test Sharpe ≥ 1.2
+- Test Max Drawdown ≤ -30%
+- Test Trades ≥ 50
 
-When creating a new version, include:
-- **Date**: When version was created
-- **Parent**: Previous version
-- **Experiment**: Experiment ID that motivated change (if any)
-- **Reason**: Why this change was made
-- **Parameter Changes**: List of changed parameters
-- **Expected Impact**: Predicted performance change
-- **Actual Impact**: Measured performance change (update after deployment)
+### Improvement Requirements (vs previous version)
+- Test Sharpe improvement ≥ 5%
+- Max DD degradation ≤ 5%
 
----
+### Regime Requirements
+- Must not blow up in crisis periods (Sharpe > -1.0)
+- Should work across multiple regimes
 
-## baseline_v1
+## Versioning Scheme
 
-**Date**: 2025-01-17 (initial version)
-**Parent**: None (baseline)
-**Reason**: Initial strategy implementation
+**Major version** (X.0): Behavioral changes
+- New analyst added/removed
+- Risk model changed
+- Fundamental logic change
 
-### Parameters
+**Minor version** (X.Y): Parameter tuning
+- Risk % adjusted
+- Weights tuned
+- Thresholds optimized
 
-- `risk.risk_pct`: 1.0
-- `risk.stop_loss_pct`: 5.0
-- `risk.take_profit_pct`: 10.0
-- `filters.dsi_threshold`: 0.5
-- `filters.min_regime_vol`: 0.01
-- `ensemble.analyst_weights.tech`: 1.0
-- `ensemble.analyst_weights.news`: 1.0
-- `ensemble.analyst_weights.risk`: 1.0
+## Promotion Workflow
 
-### Performance (2023-2025 test period)
-
-- Test Sharpe: TBD
-- Test CAGR: TBD
-- Test MaxDD: TBD
+1. **Run Experiment**: Grid search, ablation, or robustness test
+2. **Select Best**: Pick top 1-3 runs based on Sharpe + DD + robustness
+3. **Promote**: Generate new strategy YAML with updated version
+4. **Document**: Add entry to this log with changes and rationale
+5. **Validate**: Run full backtest on train+test, check regression
+6. **Paper Trade**: Deploy to paper daemon (champion/challenger)
 
 ---
 
-## Example Future Entry
+## Promotion History
 
-## baseline_v2
+(Promotions will be automatically added below)
 
-**Date**: 2025-02-01
-**Parent**: baseline_v1
-**Experiment**: #42
-**Reason**: Grid search showed higher news weight improves Sharpe ratio by 0.3
-
-### Parameter Changes
-
-- `risk.risk_pct`: 1.0 → 1.5
-- `ensemble.analyst_weights.news`: 1.0 → 1.2
-
-**Expected Impact**: +10% CAGR, +0.3 Sharpe
-**Actual Impact**: (Update after 30-day live test)
-
----
