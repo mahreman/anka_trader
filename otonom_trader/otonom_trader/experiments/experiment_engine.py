@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -238,6 +238,10 @@ def run_grid_search(
     experiment_name: str,
     strategy_path: str | Path,
     grid_path: str | Path,
+    train_start_override: Optional[date] = None,
+    train_end_override: Optional[date] = None,
+    test_start_override: Optional[date] = None,
+    test_end_override: Optional[date] = None,
 ) -> Experiment:
     """
     Run grid search experiment.
@@ -247,6 +251,10 @@ def run_grid_search(
         experiment_name: Name for this experiment
         strategy_path: Path to base strategy YAML
         grid_path: Path to parameter grid YAML
+        train_start_override: Optional train start date (overrides grid YAML)
+        train_end_override: Optional train end date (overrides grid YAML)
+        test_start_override: Optional test start date (overrides grid YAML)
+        test_end_override: Optional test end date (overrides grid YAML)
 
     Returns:
         Experiment with all runs
@@ -257,7 +265,9 @@ def run_grid_search(
         ...         session,
         ...         "baseline_v1_grid_search",
         ...         "strategies/baseline_v1.yaml",
-        ...         "grids/baseline_grid.yaml"
+        ...         "grids/baseline_grid.yaml",
+        ...         train_start_override=date(2018, 1, 1),
+        ...         train_end_override=date(2022, 12, 31),
         ...     )
         ...     print(f"Completed {len(exp.runs)} runs")
     """
@@ -286,12 +296,26 @@ def run_grid_search(
     session.add(experiment)
     session.commit()
 
-    # Get split dates
+    # Get split dates from grid YAML
     split = grid_metadata.get("split", {})
     train_start = split.get("train_start", "2017-01-01")
     train_end = split.get("train_end", "2022-12-31")
     test_start = split.get("test_start")
     test_end = split.get("test_end")
+
+    # Apply date overrides if provided
+    if train_start_override:
+        train_start = train_start_override.strftime("%Y-%m-%d")
+        logger.info(f"Overriding train_start: {train_start}")
+    if train_end_override:
+        train_end = train_end_override.strftime("%Y-%m-%d")
+        logger.info(f"Overriding train_end: {train_end}")
+    if test_start_override:
+        test_start = test_start_override.strftime("%Y-%m-%d")
+        logger.info(f"Overriding test_start: {test_start}")
+    if test_end_override:
+        test_end = test_end_override.strftime("%Y-%m-%d")
+        logger.info(f"Overriding test_end: {test_end}")
 
     # Get symbols
     symbols = grid_metadata.get("symbols", [])
@@ -332,6 +356,10 @@ def run_random_search(
     experiment_name: str,
     strategy_path: str | Path,
     grid_path: str | Path,
+    train_start_override: Optional[date] = None,
+    train_end_override: Optional[date] = None,
+    test_start_override: Optional[date] = None,
+    test_end_override: Optional[date] = None,
 ) -> Experiment:
     """
     Run random search experiment.
@@ -341,9 +369,22 @@ def run_random_search(
         experiment_name: Name for this experiment
         strategy_path: Path to base strategy YAML
         grid_path: Path to parameter grid YAML
+        train_start_override: Optional train start date (overrides grid YAML)
+        train_end_override: Optional train end date (overrides grid YAML)
+        test_start_override: Optional test start date (overrides grid YAML)
+        test_end_override: Optional test end date (overrides grid YAML)
 
     Returns:
         Experiment with all runs
     """
     # Random search is same as grid search with search_method="random"
-    return run_grid_search(session, experiment_name, strategy_path, grid_path)
+    return run_grid_search(
+        session,
+        experiment_name,
+        strategy_path,
+        grid_path,
+        train_start_override=train_start_override,
+        train_end_override=train_end_override,
+        test_start_override=test_start_override,
+        test_end_override=test_end_override,
+    )
