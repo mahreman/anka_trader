@@ -1,0 +1,151 @@
+---
+# Parameter Sweep - Baseline v1.0
+# =================================
+# Systematic hyperparameter sweep for baseline_v1.0 strategy
+# using the NEW simplified StrategyConfig format.
+#
+# Goal: Find optimal tuning of risk management, filters, and analyst weights
+#
+# This experiment explores:
+# - Risk per trade (position sizing)
+# - Stop-loss and take-profit levels
+# - DSI threshold filtering
+# - Ensemble analyst weights (tech/news/macro)
+
+name: "baseline_v1_param_sweep"
+description: "Baseline v1 stratejisi için risk/SL/TP/DSI/ensemble weight taraması"
+experiment_type: "param_sweep"
+
+# Base strategy to use
+base_strategy: "strategies/baseline_v1.0.yaml"
+
+# Search method: "grid" (exhaustive) or "random" (sample N combinations)
+search_method: "grid"
+random_samples: 100  # Only used if search_method == "random"
+
+# Train/test split
+split:
+  train_start: "2018-01-01"
+  train_end: "2021-12-31"
+  test_start: "2022-01-01"
+  test_end: "2024-12-31"
+
+# Universe override (empty = use strategy default)
+universe_override: []  # or ["BTC-USD", "ETH-USD", "SOL-USD"]
+
+# =================================
+# Parameter Grid (NEW FORMAT)
+# =================================
+# Uses dot notation matching new StrategyConfig schema:
+# - risk.risk_pct (not risk_management.position_sizing.risk_per_trade_pct)
+# - risk.stop_loss_pct (not risk_management.stop_loss.percentage)
+# - ensemble.analyst_weights.tech (not analist_1.weight)
+
+parameters:
+  # ---- Risk Management ----
+  # Risk per trade: % of equity to risk
+  risk.risk_pct:
+    values: [0.5, 1.0, 1.5]
+    description: "Risk per trade (% of equity) - 0.5%=conservative, 1.5%=aggressive"
+
+  # Stop-loss: Where to cut losses
+  risk.stop_loss_pct:
+    values: [3.0, 5.0, 8.0]
+    description: "Stop-loss % - tighter=more stops, wider=bigger losses"
+
+  # Take-profit: Where to take profits
+  risk.take_profit_pct:
+    values: [6.0, 10.0, 15.0]
+    description: "Take-profit % - lower=quick profits, higher=let winners run"
+
+  # ---- Filters ----
+  # DSI threshold: Data quality filter
+  filters.dsi_threshold:
+    values: [0.4, 0.5, 0.6]
+    description: "DSI threshold (0-1) - higher=stricter data quality"
+
+  # ---- Ensemble Weights ----
+  # Technical analyst (anomaly detection)
+  ensemble.analyst_weights.tech:
+    values: [0.8, 1.0, 1.2]
+    description: "Technical analyst weight (anomaly-based signals)"
+
+  # News/Macro/LLM analyst
+  ensemble.analyst_weights.news:
+    values: [0.5, 1.0]
+    description: "News/Macro analyst weight (fundamental signals)"
+
+  # Regime/Risk analyst
+  ensemble.analyst_weights.macro:
+    values: [0.5, 1.0]
+    description: "Regime/Risk analyst weight (market condition filters)"
+
+# Total combinations: 3 * 3 * 3 * 3 * 3 * 2 * 2 = 486 runs
+# With random sampling (100), much faster
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  # Primary metric to optimize
+  primary_metric: "test_sharpe"  # test_sharpe, test_cagr, test_sortino
+  direction: "maximize"
+
+  # Secondary metrics to track
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+    - "test_profit_factor"
+    - "test_total_trades"
+
+  # Overfitting detection
+  overfitting_check:
+    enabled: true
+    train_test_ratio_threshold: 1.5  # Warn if train/test Sharpe > 1.5
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  # Minimum acceptable metrics on test set
+  test_sharpe_min: 0.8          # Reject if test Sharpe < 0.8
+  test_max_dd_max: -40.0         # Reject if max drawdown worse than -40%
+  test_min_trades: 20            # Need at least 20 trades
+
+  # Risk/reward ratio
+  test_min_profit_factor: 1.2    # Reject if profit factor < 1.2
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1            # Number of parallel workers
+  save_equity_curves: false      # Save equity curves (uses more space)
+  save_trade_lists: true         # Save individual trades
+  verbose: true                  # Print progress
+
+# =================================
+# Expected Outcomes
+# =================================
+# This parameter sweep answers:
+# 1. What's the optimal risk per trade? (0.5% vs 1.0% vs 1.5%)
+# 2. What stop-loss/take-profit ratio works best?
+# 3. How strict should DSI filtering be?
+# 4. Which analyst weights are most effective?
+# 5. Is the strategy robust across different parameters?
+#
+# Look for:
+# - Top 5 configurations with best test Sharpe
+# - Consistency: Do similar params give similar results?
+# - Overfitting: Is train Sharpe >> test Sharpe?
+# - Robustness: Does small param change cause big performance change?
+#
+# CLI command:
+#   python -m otonom_trader.cli experiments grid-search \
+#     --experiment-name baseline_v1_param_sweep \
+#     --strategy-path strategies/baseline_v1.0.yaml \
+#     --grid-path experiments/param_sweep_baseline.yaml \
+#     --train-start 2018-01-01 --train-end 2021-12-31 \
+#     --test-start 2022-01-01 --test-end 2024-12-31 \
+#     --description "Baseline v1 param sweep"
