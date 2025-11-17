@@ -24,6 +24,15 @@ from .runner import (
     run_multi_symbol_backtest,
     aggregate_backtest_metrics,
 )
+from .report_generator import (
+    ExperimentReport,
+    generate_experiment_report,
+)
+from .strategy_versioning import (
+    create_strategy_version,
+    append_to_strategy_log,
+    promote_experiment_to_strategy,
+)
 
 __all__ = [
     # Experiment runners
@@ -47,4 +56,11 @@ __all__ = [
     "run_train_test_backtest",
     "run_multi_symbol_backtest",
     "aggregate_backtest_metrics",
+    # Report generation
+    "ExperimentReport",
+    "generate_experiment_report",
+    # Strategy versioning
+    "create_strategy_version",
+    "append_to_strategy_log",
+    "promote_experiment_to_strategy",
 ]

@@ -1,0 +1,39 @@
+# Smoke Test Experiment
+#
+# Focus: Quick validation that experiment engine works
+# Goal: Run in < 5 minutes to validate pipeline
+
+name: "smoke_test"
+description: "Fast experiment to validate pipeline without exhaustive search"
+
+# Minimal parameter grid - just a few combinations
+params:
+  risk.risk_pct: [1.0, 2.0]
+  risk.stop_loss_pct: [5.0]
+  risk.take_profit_pct: [10.0]
+
+  ensemble.analyst_weights.tech: [1.0]
+  ensemble.analyst_weights.news: [1.0]
+  ensemble.analyst_weights.risk: [1.0]
+
+# Search method
+search_method: "grid"
+
+# Short train/test split - recent data only
+split:
+  train_start: "2023-01-01"
+  train_end: "2024-06-30"
+  test_start: "2024-07-01"
+  test_end: "2025-01-17"
+
+# Minimal symbol set
+symbols:
+  - BTC-USD
+
+# Expected combinations: 2 runs (very fast)
+
+# Purpose: Validate
+# - Experiment engine works
+# - Backtests run without errors
+# - Metrics are calculated correctly
+# - Reports are generated

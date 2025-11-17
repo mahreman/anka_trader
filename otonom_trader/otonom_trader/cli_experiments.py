@@ -303,6 +303,7 @@ def show_experiment(
     experiment_id: int = typer.Argument(..., help="Experiment ID"),
     db: str = typer.Option("trader.db", "--db", help="Database path"),
     top: int = typer.Option(10, "--top", help="Number of top results to show"),
+    export: str = typer.Option(None, "--export", help="Export report to file (e.g., reports/exp_1.html)"),
 ):
     """
     Show detailed experiment results.
@@ -373,3 +374,32 @@ def show_experiment(
         params = json.loads(best_run.param_values_json)
         for key, value in params.items():
             console.print(f"  {key}: {value}")
+
+        # Export report if requested
+        if export:
+            from ..experiments import generate_experiment_report
+
+            # Determine format from file extension
+            if export.endswith(".html"):
+                format = "html"
+            elif export.endswith(".md"):
+                format = "markdown"
+            else:
+                # Default to HTML
+                format = "html"
+                if not export.endswith(".html"):
+                    export += ".html"
+
+            console.print(f"\n[cyan]Generating {format.upper()} report...[/cyan]")
+
+            try:
+                report_path = generate_experiment_report(
+                    session=session,
+                    experiment_id=experiment_id,
+                    output_path=export,
+                    format=format,
+                )
+                console.print(f"[bold green]✓ Report saved to:[/bold green] {report_path}")
+            except Exception as e:
+                console.print(f"[red]Failed to generate report: {e}[/red]")
+                logger.error(f"Report generation failed: {e}", exc_info=True)
