@@ -1,0 +1,60 @@
+# Risk Model Ablation Study
+#
+# Focus: Isolate impact of stop-loss, take-profit, and position sizing
+# Hypothesis: Stop-loss and take-profit improve risk-adjusted returns
+
+name: "risk_model_ablation"
+description: "Ablation study to measure individual contribution of risk management components"
+
+# Parameter combinations - test each component independently
+params:
+  # Position sizing sweep
+  risk.risk_pct: [0.5, 1.0, 2.0]
+
+  # Stop-loss ablation (0 = disabled, positive = enabled)
+  risk.stop_loss_pct: [0.0, 3.0, 5.0, 8.0]
+
+  # Take-profit ablation
+  risk.take_profit_pct: [0.0, 10.0, 15.0, 20.0]
+
+  # Keep filters at baseline
+  filters.dsi_threshold: [0.5]
+  filters.min_regime_vol: [0.010]
+
+  # Keep analyst weights balanced
+  ensemble.analyst_weights.tech: [1.0]
+  ensemble.analyst_weights.news: [1.0]
+  ensemble.analyst_weights.risk: [1.0]
+
+# Search method
+search_method: "grid"
+
+# Train/test split - longer history for risk model validation
+split:
+  train_start: "2017-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2025-01-17"
+
+# Symbol universe - diverse assets
+symbols:
+  - BTC-USD
+  - ETH-USD
+  - GOLD
+  - SPY
+
+# Expected combinations: 3 * 4 * 4 = 48 runs
+
+# Analysis focus
+analysis:
+  compare:
+    - baseline: {stop_loss_pct: 0.0, take_profit_pct: 0.0}  # No risk controls
+    - with_stop_loss: {stop_loss_pct: 5.0, take_profit_pct: 0.0}  # Stop-loss only
+    - with_take_profit: {stop_loss_pct: 0.0, take_profit_pct: 10.0}  # Take-profit only
+    - full_risk: {stop_loss_pct: 5.0, take_profit_pct: 10.0}  # Both enabled
+
+  metrics_of_interest:
+    - test_sharpe
+    - test_max_dd
+    - test_win_rate
+    - test_profit_factor

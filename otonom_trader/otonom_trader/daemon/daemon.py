@@ -198,15 +198,19 @@ def run_daemon_cycle(
 
             run.trades_executed = trades_executed
 
-            # Update portfolio snapshot
-            summary = paper_trader.get_portfolio_summary()
-            run.portfolio_value = summary["total_value"]
-            run.cash = summary["cash"]
+            # Create portfolio snapshot
+            snapshot = paper_trader.create_portfolio_snapshot()
+
+            # Update daemon run with portfolio metrics
+            run.portfolio_value = snapshot.equity
+            run.cash = snapshot.cash
 
             logger.info(f"  ✓ Executed {trades_executed} trades")
-            logger.info(f"  Portfolio value: ${summary['total_value']:,.2f}")
-            logger.info(f"  Cash: ${summary['cash']:,.2f}")
-            logger.info(f"  Positions: {summary['num_positions']}")
+            logger.info(f"  Portfolio value: ${snapshot.equity:,.2f}")
+            logger.info(f"  Cash: ${snapshot.cash:,.2f}")
+            logger.info(f"  Positions: {snapshot.num_positions}")
+            if snapshot.max_drawdown is not None:
+                logger.info(f"  Max drawdown: {snapshot.max_drawdown:.2%}")
 
         else:
             logger.info("\n[4/4] Paper trade execution... SKIPPED")

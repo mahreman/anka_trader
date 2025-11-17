@@ -1,7 +1,7 @@
 """
 Analytics layer - Returns calculation, anomaly detection, labeling, regime detection, and data health.
 
-P2 additions: News, calendar, LLM agents, and resolver utilities.
+P2 additions: News, calendar, LLM agents, resolver utilities, and analyst modules.
 """
 from .returns import compute_returns
 from .anomaly import detect_anomalies_for_asset, detect_anomalies_all_assets
@@ -45,6 +45,16 @@ from .resolvers import (
     resolve_regime,
     resolve_dsi,
 )
+from .analyst_news import (
+    NewsContext,
+    MacroContext,
+    generate_news_analyst_signal,
+)
+from .analyst_risk import (
+    RiskMode,
+    PositionSizingRec,
+    generate_risk_analyst_signal,
+)
 
 __all__ = [
     "compute_returns",
@@ -81,4 +91,11 @@ __all__ = [
     # P2: Resolvers
     "resolve_regime",
     "resolve_dsi",
+    # P2: Analyst modules
+    "NewsContext",
+    "MacroContext",
+    "generate_news_analyst_signal",
+    "RiskMode",
+    "PositionSizingRec",
+    "generate_risk_analyst_signal",
 ]

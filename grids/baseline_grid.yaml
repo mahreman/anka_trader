@@ -1,0 +1,109 @@
+---
+# Parameter Grid for baseline_v1 Strategy
+# ========================================
+# Defines parameter search space for systematic optimization.
+#
+# Each parameter can have:
+# - values: List of discrete values to try
+# - range: [min, max, step] for numeric ranges
+# - type: "choice" (default), "uniform", "loguniform"
+
+name: "baseline_grid_v1"
+description: "Parameter grid for baseline_v1 strategy optimization"
+
+# Search method: "grid" (exhaustive) or "random" (sample N combinations)
+search_method: "grid"  # or "random"
+random_samples: 50  # Only used if search_method == "random"
+
+# Train/test split
+split:
+  train_start: "2017-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2025-01-17"
+
+# Symbols to test (empty = use strategy default)
+symbols: []  # ["BTC-USD", "ETH-USD"] or [] for all
+
+# =================================
+# Parameter Grid
+# =================================
+parameters:
+  # Risk management parameters
+  risk_management.position_sizing.risk_per_trade_pct:
+    values: [0.5, 1.0, 2.0]
+    description: "Risk per trade as percentage of portfolio"
+
+  risk_management.stop_loss.percentage:
+    values: [3.0, 5.0, 8.0]
+    description: "Stop-loss percentage"
+
+  risk_management.take_profit.percentage:
+    values: [8.0, 10.0, 15.0]
+    description: "Take-profit percentage"
+
+  # Analyst weights
+  analist_1.weight:
+    values: [0.8, 1.0, 1.2]
+    description: "Technical analyst weight"
+
+  analist_2.weight:
+    values: [1.0, 1.2, 1.5]
+    description: "News/Macro/LLM analyst weight"
+
+  analist_3.weight:
+    values: [0.6, 0.8, 1.0]
+    description: "Regime/DSI risk analyst weight"
+
+  # Anomaly detection threshold
+  analist_1.anomaly_detection.zscore_threshold:
+    values: [1.5, 2.0, 2.5]
+    description: "Z-score threshold for anomaly detection"
+
+  # Portfolio constraints
+  portfolio_constraints.turnover_limits.max_daily_trades:
+    values: [5, 10, 20]
+    description: "Maximum daily trades"
+
+  portfolio_constraints.cooldown.hours_after_flip:
+    values: [12, 24, 48]
+    description: "Cooldown hours after position flip"
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  # Primary metric to optimize
+  primary_metric: "test_sharpe"  # test_sharpe, test_cagr, test_sortino
+
+  # Direction: "maximize" or "minimize"
+  direction: "maximize"
+
+  # Secondary metrics to track
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+
+  # Overfitting detection
+  overfitting_check:
+    enabled: true
+    # Warn if train metric >> test metric
+    train_test_ratio_threshold: 1.5  # train_sharpe / test_sharpe > 1.5
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  # Minimum acceptable metrics on test set
+  test_sharpe_min: 0.5
+  test_max_dd_max: -40.0  # Max acceptable drawdown: -40%
+  test_min_trades: 10  # Need at least 10 trades on test set
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1  # Number of parallel backtest workers
+  save_equity_curves: false  # Save full equity curves to DB
+  verbose: true  # Print progress
