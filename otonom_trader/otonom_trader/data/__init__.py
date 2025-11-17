@@ -12,6 +12,8 @@ from .schema import (
     DataHealthIndex as DsiORM,
     Hypothesis,
     HypothesisResult,
+    NewsArticle as NewsArticleORM,
+    MacroIndicator as MacroIndicatorORM,
 )
 from .schema_experiments import (
     Experiment,
@@ -31,6 +33,8 @@ __all__ = [
     "DsiORM",
     "Hypothesis",
     "HypothesisResult",
+    "NewsArticleORM",
+    "MacroIndicatorORM",
     "Experiment",
     "ExperimentRun",
 ]

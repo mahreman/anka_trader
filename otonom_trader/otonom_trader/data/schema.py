@@ -364,3 +364,77 @@ class PortfolioSnapshot(Base):
     def __repr__(self) -> str:
         dd_str = f"{self.max_drawdown:.2%}" if self.max_drawdown else "N/A"
         return f"<PortfolioSnapshot(ts={self.timestamp}, equity=${self.equity:.2f}, dd={dd_str})>"
+
+
+class NewsArticle(Base):
+    """
+    News articles for sentiment analysis.
+
+    P3 data integration: Real-time news feed for News/LLM analyst.
+    """
+
+    __tablename__ = "news_articles"
+    __table_args__ = (
+        Index("ix_news_published_at", "published_at"),
+        Index("ix_news_source", "source"),
+        Index("ix_news_sentiment", "sentiment"),
+        UniqueConstraint("url", name="uq_news_url"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Article metadata
+    source = Column(String(100), nullable=False)  # NewsAPI, Bloomberg, etc.
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    url = Column(Text, nullable=False, unique=True)  # Unique constraint on URL
+    published_at = Column(DateTime, nullable=False, index=True)
+    author = Column(String(200), nullable=True)
+
+    # Analysis
+    sentiment = Column(Float, nullable=True)  # -1 (bearish) to +1 (bullish)
+    sentiment_source = Column(String(50), nullable=True)  # LLM model used for sentiment
+
+    # Symbol associations (comma-separated)
+    symbols = Column(String(500), nullable=True)  # e.g., "BTC-USD,ETH-USD"
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        sentiment_str = f"{self.sentiment:.2f}" if self.sentiment else "N/A"
+        return f"<NewsArticle(id={self.id}, source={self.source}, sentiment={sentiment_str})>"
+
+
+class MacroIndicator(Base):
+    """
+    Macroeconomic indicators for regime detection.
+
+    P3 data integration: Economic data for risk/regime analyst.
+    """
+
+    __tablename__ = "macro_indicators"
+    __table_args__ = (
+        Index("ix_macro_indicator_code", "indicator_code"),
+        Index("ix_macro_date", "date"),
+        UniqueConstraint("indicator_code", "date", name="uq_macro_indicator_date"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Indicator metadata
+    indicator_code = Column(String(50), nullable=False, index=True)  # e.g., "GDP", "UNRATE", "DFF"
+    indicator_name = Column(String(200), nullable=False)  # e.g., "Unemployment Rate"
+    date = Column(Date, nullable=False, index=True)
+
+    # Value
+    value = Column(Float, nullable=False)
+    unit = Column(String(50), nullable=True)  # e.g., "Percent", "Billions of Dollars"
+    frequency = Column(String(20), nullable=True)  # e.g., "Monthly", "Quarterly"
+
+    # Provider metadata
+    provider = Column(String(50), nullable=True)  # e.g., "FRED", "WorldBank"
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<MacroIndicator(code={self.indicator_code}, date={self.date}, value={self.value})>"
