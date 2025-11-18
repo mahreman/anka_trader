@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..data import get_session
 from ..data.ingest import ingest_incremental
 from ..data.ingest_providers import ingest_intraday_bars_all, ingest_news_data
-from ..data.symbols import get_p0_assets, ensure_p0_symbols
+from ..data.symbols import ensure_p0_symbols, get_tracked_assets
 from ..data.schema import DaemonRun, Symbol, Anomaly as AnomalyORM
 from ..analytics import detect_anomalies_all_assets
 from ..patron import run_daily_decision_pass
@@ -120,10 +120,11 @@ def run_daemon_cycle(
     try:
         # Step 1: Incremental data ingest
         logger.info("\n[1/4] Incremental data ingest...")
-        assets = get_p0_assets()
         seeded = ensure_p0_symbols(session)
         if seeded:
             logger.info("  Seeded %s missing symbols before ingest", seeded)
+
+        assets = get_tracked_assets(session)
 
         if config.price_interval.lower() == "1d":
             ingest_results = ingest_incremental(

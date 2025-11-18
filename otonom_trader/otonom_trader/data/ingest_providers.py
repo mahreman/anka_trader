@@ -414,7 +414,7 @@ def ingest_news_data(
             (
                 cfg
                 for cfg in provider_config.get_enabled_news_providers()
-                if cfg.provider_type.lower() == "yfinance"
+                if cfg.provider_type.lower() in {"yfinance", "yfinance_news"}
             ),
             None,
         )

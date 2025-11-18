@@ -10,6 +10,11 @@ class AssetClass(str, Enum):
     COMMODITY = "COMMODITY"
     INDEX = "INDEX"
     CRYPTO = "CRYPTO"
+    EQUITY = "EQUITY"
+    FX = "FX"
+    ETF = "ETF"
+    BOND = "BOND"
+    OTHER = "OTHER"
 
     def __str__(self) -> str:
         return self.value

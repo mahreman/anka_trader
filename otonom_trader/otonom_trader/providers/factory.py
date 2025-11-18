@@ -102,7 +102,7 @@ def create_news_provider(config: NewsProviderConfig) -> NewsProvider:
         from .news_newsapi import NewsAPIProvider
         return NewsAPIProvider(provider_config)
 
-    elif provider_type == "yfinance":
+    elif provider_type in {"yfinance", "yfinance_news"}:
         from .news_yfinance import YFinanceNewsProvider
         return YFinanceNewsProvider(provider_config)
 
