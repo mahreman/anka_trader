@@ -433,12 +433,16 @@ def ingest_news_data(
 
     provider = create_news_provider(provider_cfg)
 
+    now = ensure_aware(end_date) if end_date else datetime.now(timezone.utc)
+    lookback_days = provider_cfg.extra.get("days_back", 30)
+    start_dt = ensure_aware(start_date) if start_date else now - timedelta(days=lookback_days)
+
     try:
         # Fetch news articles
         articles = provider.fetch_news(
             symbol=normalized_symbol,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=start_dt,
+            end_date=now,
             limit=limit,
         )
 
@@ -460,18 +464,32 @@ def ingest_news_data(
                 existing.sentiment_source = "provider"
             else:
                 # Insert new
-                symbols_list = [s for s in (article.symbols or []) if s]
+                symbols_list = [s for s in (getattr(article, "symbols", []) or []) if s]
                 if normalized_symbol:
                     if not any(
                         (sym or "").upper() == normalized_upper for sym in symbols_list
                     ):
                         symbols_list.append(normalized_symbol)
-                symbols_str = ",".join(symbols_list) if symbols_list else None
+                elif not symbols_list and article and getattr(article, "symbol", None):
+                    symbols_list.append(article.symbol)
+
+                if not symbols_list and normalized_symbol:
+                    symbols_list.append(normalized_symbol)
+
+                symbols_str = ",".join(symbols_list) if symbols_list else (
+                    normalized_symbol if normalized_symbol else None
+                )
+
+                description = (
+                    getattr(article, "description", "")
+                    or getattr(article, "summary", "")
+                    or ""
+                )
 
                 new_article = NewsArticle(
                     source=article.source,
                     title=article.title,
-                    description=article.description,
+                    description=description,
                     url=article.url,
                     published_at=ensure_aware(article.published_at),
                     author=article.author,
