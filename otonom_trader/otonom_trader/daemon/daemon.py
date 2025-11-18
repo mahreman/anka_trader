@@ -17,12 +17,12 @@ from sqlalchemy.orm import Session
 
 from ..data import get_session
 from ..data.ingest import ingest_incremental
-from ..data.ingest_providers import ingest_intraday_bars_all
+from ..data.ingest_providers import ingest_intraday_bars_all, ingest_news_data
 from ..data.symbols import get_p0_assets
 from ..data.schema import DaemonRun, Symbol, Anomaly as AnomalyORM
 from ..analytics import detect_anomalies_all_assets
 from ..patron import run_daily_decision_pass
-from ..domain import Decision as DecisionDomain, AnomalyType
+from ..domain import Decision as DecisionDomain, AnomalyType, AssetClass
 from ..config import (
     ANOMALY_ZSCORE_THRESHOLD,
     ANOMALY_VOLUME_QUANTILE,
@@ -136,6 +136,19 @@ def run_daemon_cycle(
         run.bars_ingested = bars_ingested
 
         logger.info(f"  ✓ Ingested {bars_ingested} bars across {len(assets)} assets")
+
+        # News ingest for non-crypto assets
+        logger.info("  Ingesting news data...")
+        total_news = 0
+        for asset in assets:
+            if asset.asset_class == AssetClass.CRYPTO:
+                continue
+            try:
+                news_count = ingest_news_data(session, symbol=asset.symbol, limit=5)
+                total_news += news_count
+            except Exception as e:
+                logger.error(f"News ingest failed for {asset.symbol}: {e}")
+        logger.info(f"  \u2713 Ingested {total_news} news articles")
 
         # Step 2: Anomaly detection (on recent data only)
         logger.info("\n[2/4] Anomaly detection...")
