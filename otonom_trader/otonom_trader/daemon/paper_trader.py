@@ -4,13 +4,13 @@ P3 preparation: Simulated trade execution and portfolio tracking.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Dict, Optional
 
 from sqlalchemy.orm import Session
 
 from ..data.schema import Symbol, PaperTrade, DailyBar
 from ..domain import Decision, SignalType
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +365,7 @@ class PaperTrader:
 
         # Create trade record
         trade = PaperTrade(
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
             symbol_id=symbol_obj.id,
             decision_id=decision_id,
             action=action,
@@ -453,7 +453,7 @@ class PaperTrader:
 
         # Create snapshot
         snapshot = PortfolioSnapshot(
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
             equity=equity,
             cash=cash,
             positions_value=positions_value,

@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
 
 from .notifier import Notifier
 from ..data import get_session
 from ..data.schema import DaemonRun, PortfolioSnapshot
+from ..utils import ensure_aware, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class AlertEngine:
         >>> alerts = AlertEngine()
         >>> alerts.notify_broker_error("Connection timeout")
         >>> alerts.notify_kill_switch("Max daily loss exceeded")
-        >>> alerts.check_and_notify(datetime.utcnow())
+        >>> alerts.check_and_notify()
     """
 
     def __init__(self, alerts_config_path: str = "config/alerts.yaml"):
@@ -100,7 +102,7 @@ class AlertEngine:
             body=msg,
         )
 
-    def check_and_notify(self, now: datetime) -> None:
+    def check_and_notify(self, now: Optional[datetime] = None) -> None:
         """
         Check system health and send alerts if needed.
         
@@ -109,10 +111,11 @@ class AlertEngine:
         - Portfolio performance (extreme drawdown?)
         
         Args:
-            now: Current timestamp
+            now: Optional current timestamp (defaults to utc_now)
         """
-        self._check_daemon_heartbeat(now)
-        self._check_portfolio_health(now)
+        current_time = ensure_aware(now) if now else utc_now()
+        self._check_daemon_heartbeat(current_time)
+        self._check_portfolio_health(current_time)
 
     def _check_daemon_heartbeat(self, now: datetime) -> None:
         """
@@ -137,11 +140,16 @@ class AlertEngine:
                 )
                 return
 
-            delta = now - last_run.timestamp
+            last_timestamp = ensure_aware(last_run.timestamp)
+            if last_timestamp is None:
+                logger.warning("Last daemon run timestamp missing timezone information")
+                return
+
+            delta = now - last_timestamp
             
             # Alert if daemon hasn't run in 30 minutes
             if delta > timedelta(minutes=30):
-                self.notify_daemon_stall(last_run.timestamp, delta)
+                self.notify_daemon_stall(last_timestamp, delta)
                 
         except Exception as e:
             logger.error(f"Error checking daemon heartbeat: {e}")

@@ -10,7 +10,7 @@ Pipeline:
 """
 import logging
 import time
-from datetime import datetime, date, timedelta
+from datetime import date, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ from ..config import (
     ANOMALY_ROLLING_WINDOW,
 )
 from .paper_trader import PaperTrader
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ def run_daemon_cycle(
         config = DaemonConfig()
 
     start_time = time.time()
-    timestamp = datetime.utcnow()
+    timestamp = utc_now()
 
     logger.info("=" * 60)
     logger.info(f"Starting daemon cycle at {timestamp}")

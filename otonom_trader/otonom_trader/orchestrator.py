@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Set
 
@@ -29,6 +28,7 @@ from .data import get_session, get_engine, init_db
 from .daemon.daemon import DaemonConfig, run_daemon_cycle, get_or_create_paper_trader
 from .daemon.trading_daemon import TradingDaemon, ExecutionMode
 from .alerts.engine import AlertEngine
+from .utils import utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ def run_orchestrator_loop() -> None:
             continue
 
         cycle += 1
-        start_time = datetime.now(timezone.utc)
+        start_time = utc_now()
         logger.info(
             "===== Orchestrator cycle #%d starting at %s (mode=%s) =====",
             cycle,
@@ -240,7 +240,7 @@ def run_orchestrator_loop() -> None:
                 logger.info("TradingDaemon run_once() completed (mode=%s).", mode)
 
             # 3) Alert engine health checks
-            alerts.check_and_notify(datetime.now(timezone.utc))
+            alerts.check_and_notify()
 
         except KeyboardInterrupt:
             logger.info("Orchestrator stopped by user.")
@@ -248,7 +248,7 @@ def run_orchestrator_loop() -> None:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Orchestrator cycle #%d failed: %s", cycle, exc, exc_info=True)
 
-        end_time = datetime.now(timezone.utc)
+        end_time = utc_now()
         elapsed = (end_time - start_time).total_seconds()
         target_interval = max(cfg.interval_seconds, 60)
         sleep_for = max(target_interval - elapsed, 0)

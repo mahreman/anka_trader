@@ -24,6 +24,7 @@ from .analytics import detect_anomalies_all_assets
 from .patron import run_daily_decision_pass, format_decision_summary
 from .patron.reporter import format_anomaly_list
 from .domain import Anomaly as AnomalyDomain, Decision as DecisionDomain, AnomalyType
+from .utils import utc_now
 
 # Configure logging
 logging.basicConfig(
@@ -1272,7 +1273,7 @@ def status():
     - Daemon health check
     """
     try:
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         from .data.schema import (
             Regime as RegimeORM,
             DataHealthIndex as DsiORM,
@@ -1319,7 +1320,7 @@ def status():
             typer.echo("LAST 24 HOURS")
             typer.echo("=" * 60)
 
-            now = datetime.utcnow()
+            now = utc_now()
             yesterday = now - timedelta(hours=24)
 
             # Bars ingested

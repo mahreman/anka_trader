@@ -14,14 +14,21 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..providers import (
-    create_all_providers,
     get_primary_price_provider,
     get_primary_news_provider,
     get_primary_macro_provider,
     ProviderError,
 )
-from ..providers.base import OHLCVBar, NewsArticle as ProviderNewsArticle, MacroIndicator as ProviderMacroIndicator
+from ..providers.base import (
+    OHLCVBar,
+    NewsArticle as ProviderNewsArticle,
+    MacroIndicator as ProviderMacroIndicator,
+    PriceProvider,
+)
+from ..providers.config import ProviderConfig, get_provider_config
+from ..providers.factory import create_price_provider
 from .schema import Symbol, DailyBar, IntradayBar, NewsArticle, MacroIndicator
+from .symbols import ensure_p0_symbols
 
 logger = logging.getLogger(__name__)
 
@@ -156,12 +163,55 @@ def _normalize_timestamp(value: date | datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _normalize_asset_class(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    upper = value.upper()
+    if upper.startswith("ASSETCLASS."):
+        return upper.split(".", 1)[1]
+    return upper
+
+
+def _get_provider_for_type(
+    provider_type: str,
+    provider_cache: Dict[str, Optional[PriceProvider]],
+    provider_config: ProviderConfig,
+):
+    key = (provider_type or "").lower()
+    if key in provider_cache:
+        return provider_cache[key]
+
+    for p_cfg in provider_config.get_enabled_price_providers():
+        if p_cfg.provider_type.lower() == key:
+            provider = create_price_provider(p_cfg)
+            provider_cache[key] = provider
+            return provider
+
+    logger.warning("Price provider '%s' requested but not enabled", provider_type)
+    provider_cache[key] = None
+    return None
+
+
+def _resolve_intraday_provider(
+    symbol_obj: Symbol,
+    provider_cache: Dict[str, Optional[PriceProvider]],
+    provider_config: ProviderConfig,
+) -> Optional[PriceProvider]:
+    asset_class = _normalize_asset_class(symbol_obj.asset_class)
+    provider_type = "binance" if asset_class == "CRYPTO" else "yfinance"
+    provider = _get_provider_for_type(provider_type, provider_cache, provider_config)
+    if provider is None and provider_type != "yfinance":
+        # Fallback to yfinance for non-crypto assets when Binance is unavailable
+        provider = _get_provider_for_type("yfinance", provider_cache, provider_config)
+    return provider
+
+
 def ingest_intraday_bars_for_symbol(
     session: Session,
     symbol_obj: Symbol,
     interval: str = "15m",
     lookback_days: int = 7,
-    provider = None,
+    provider: Optional[PriceProvider] = None,
     provider_config_path: str = "config/providers.yaml",
 ) -> int:
     """Ingest intraday bars for a single symbol."""
@@ -263,18 +313,30 @@ def ingest_intraday_bars_all(
 ) -> int:
     """Ingest intraday bars for all symbols in the database."""
 
+    seeded = ensure_p0_symbols(session)
+    if seeded:
+        logger.info("Seeded %s default symbols for intraday ingest", seeded)
+
     symbols = session.query(Symbol).order_by(Symbol.symbol.asc()).all()
     if not symbols:
         logger.info("No symbols available for intraday ingest")
         return 0
 
-    provider = get_primary_price_provider(provider_config_path)
-    if provider is None:
-        logger.warning("Cannot ingest intraday data without an enabled price provider")
-        return 0
+    provider_cache: Dict[str, Optional[PriceProvider]] = {}
+    provider_config = get_provider_config(provider_config_path)
 
     total = 0
+    processed = 0
     for symbol_obj in symbols:
+        provider = _resolve_intraday_provider(symbol_obj, provider_cache, provider_config)
+        if provider is None:
+            logger.warning(
+                "Skipping %s; no provider configured for asset class '%s'",
+                symbol_obj.symbol,
+                symbol_obj.asset_class,
+            )
+            continue
+
         count = ingest_intraday_bars_for_symbol(
             session,
             symbol_obj,
@@ -283,11 +345,12 @@ def ingest_intraday_bars_all(
             provider=provider,
             provider_config_path=provider_config_path,
         )
+        processed += 1
         if count:
             session.commit()
         total += count
 
-    logger.info("Ingested %s intraday bars across %s symbols", total, len(symbols))
+    logger.info("Ingested %s intraday bars across %s symbols", total, processed)
     return total
 
 

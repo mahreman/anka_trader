@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from ..brokers import Broker, OrderRequest, OrderResult, create_broker
 from ..data import DecisionORM as Decision
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ class ShadowModeExecutor:
             >>> decision = Decision(symbol="BTC-USD", direction="BUY", strength=0.8)
             >>> log = executor.execute_decision(session, decision, current_price=50000)
         """
-        start_time = datetime.utcnow()
+        start_time = utc_now()
 
         # Determine trade parameters
         symbol = decision.symbol
@@ -160,7 +161,7 @@ class ShadowModeExecutor:
                     current_positions=current_positions,
                 )
 
-                broker_ack_time = datetime.utcnow()
+                broker_ack_time = utc_now()
                 latency_ms = (broker_ack_time - start_time).total_seconds() * 1000
 
                 if broker_result.ok:

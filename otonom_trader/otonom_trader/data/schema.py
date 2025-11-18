@@ -18,6 +18,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship
 
+from ..utils import utc_now
+
 Base = declarative_base()
 
 
@@ -123,7 +125,7 @@ class Anomaly(Base):
     zscore = Column(Float, nullable=False)  # Z-score of return
     volume_rank = Column(Float, nullable=False)  # Volume percentile (0-1)
     comment = Column(Text, nullable=True)  # Manual comment/note
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol", back_populates="anomalies")
@@ -158,7 +160,7 @@ class Decision(Base):
     uncertainty = Column(Float, nullable=True)  # Decision uncertainty (0-1, higher = less certain)
     analyst_signals = Column(Text, nullable=True)  # JSON string of analyst signals
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol", back_populates="decisions")
@@ -187,7 +189,7 @@ class Regime(Base):
     volatility = Column(Float, nullable=False)  # Rolling volatility
     trend = Column(Float, nullable=False)  # Rolling trend
     is_structural_break = Column(Integer, nullable=False, default=0)  # Boolean as int
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol", back_populates="regimes")
@@ -216,7 +218,7 @@ class DataHealthIndex(Base):
     missing_ratio = Column(Float, nullable=False)  # Fraction of missing data
     outlier_ratio = Column(Float, nullable=False)  # Fraction of extreme outliers
     volume_jump_ratio = Column(Float, nullable=False)  # Fraction of volume jumps
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol", back_populates="dsi_records")
@@ -238,7 +240,7 @@ class Hypothesis(Base):
     description = Column(Text, nullable=True)
     rule_signature = Column(Text, nullable=False)  # e.g., "SPIKE_DOWN + Uptrend → BUY"
     config_json = Column(Text, nullable=True)  # Serialized config (JSON string)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     results = relationship("HypothesisResult", back_populates="hypothesis", cascade="all, delete-orphan")
@@ -278,7 +280,7 @@ class HypothesisResult(Base):
     dsi = Column(Float, nullable=True)  # Data quality at entry
 
     meta_json = Column(Text, nullable=True)  # Additional metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     hypothesis = relationship("Hypothesis", back_populates="results")
@@ -304,7 +306,7 @@ class PaperTrade(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, nullable=False, default=utc_now, index=True)
     symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
     decision_id = Column(Integer, ForeignKey("decisions.id"), nullable=True)
 
@@ -320,7 +322,7 @@ class PaperTrade(Base):
 
     # Metadata
     notes = Column(Text, nullable=True)  # Optional notes
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol")
@@ -342,7 +344,7 @@ class DaemonRun(Base):
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    timestamp = Column(DateTime, nullable=False, default=utc_now, index=True)
 
     # Pipeline stats
     bars_ingested = Column(Integer, nullable=False, default=0)
@@ -359,7 +361,7 @@ class DaemonRun(Base):
     error_message = Column(Text, nullable=True)
     duration_seconds = Column(Float, nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     def __repr__(self) -> str:
         return f"<DaemonRun(id={self.id}, timestamp={self.timestamp}, status={self.status})>"
@@ -390,7 +392,7 @@ class PortfolioSnapshot(Base):
     max_drawdown = Column(Float, nullable=True)  # Max drawdown from peak (as fraction)
     max_equity = Column(Float, nullable=True)  # Maximum equity achieved so far
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     def __repr__(self) -> str:
         dd_str = f"{self.max_drawdown:.2%}" if self.max_drawdown else "N/A"
@@ -445,7 +447,7 @@ class Trade(Base):
 
     # Metadata
     notes = Column(Text, nullable=True)  # Optional notes
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     # Relationships
     symbol_obj = relationship("Symbol")
@@ -488,7 +490,7 @@ class NewsArticle(Base):
     # Symbol associations (comma-separated)
     symbols = Column(String(500), nullable=True)  # e.g., "BTC-USD,ETH-USD"
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     def __repr__(self) -> str:
         sentiment_str = f"{self.sentiment:.2f}" if self.sentiment else "N/A"
@@ -524,7 +526,7 @@ class MacroIndicator(Base):
     # Provider metadata
     provider = Column(String(50), nullable=True)  # e.g., "FRED", "WorldBank"
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=utc_now)
 
     def __repr__(self) -> str:
         return f"<MacroIndicator(code={self.indicator_code}, date={self.date}, value={self.value})>"

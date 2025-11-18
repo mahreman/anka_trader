@@ -3,7 +3,10 @@ Asset symbols and metadata for P0 version.
 """
 from typing import List
 
+from sqlalchemy.orm import Session
+
 from ..domain import Asset, AssetClass
+from .schema import Symbol
 
 
 def get_p0_assets() -> List[Asset]:
@@ -79,3 +82,29 @@ def get_asset_by_symbol(symbol: str) -> Asset:
         if asset.symbol == symbol:
             return asset
     raise ValueError(f"Asset with symbol '{symbol}' not found in P0 asset list")
+
+
+def ensure_p0_symbols(session: Session) -> int:
+    """Ensure that all baseline P0 assets exist in the symbols table."""
+
+    existing = {
+        row[0] for row in session.query(Symbol.symbol).all()
+    }
+    added = 0
+
+    for asset in get_p0_assets():
+        if asset.symbol in existing:
+            continue
+        session.add(
+            Symbol(
+                symbol=asset.symbol,
+                name=asset.name,
+                asset_class=str(asset.asset_class),
+            )
+        )
+        added += 1
+
+    if added:
+        session.commit()
+
+    return added
