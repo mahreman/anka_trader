@@ -15,7 +15,6 @@ from sqlalchemy import func
 
 from ..providers import (
     get_primary_price_provider,
-    get_primary_news_provider,
     get_primary_macro_provider,
     ProviderError,
 )
@@ -26,9 +25,10 @@ from ..providers.base import (
     PriceProvider,
 )
 from ..providers.config import ProviderConfig, get_provider_config
-from ..providers.factory import create_price_provider
+from ..providers.factory import create_price_provider, create_news_provider
 from .schema import Symbol, DailyBar, IntradayBar, NewsArticle, MacroIndicator
 from .symbols import ensure_p0_symbols
+from ..utils import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -383,17 +383,60 @@ def ingest_news_data(
     """
     logger.info(f"Ingesting news data (symbol={symbol}, limit={limit})")
 
-    # Get primary news provider
-    provider = get_primary_news_provider(provider_config_path)
+    normalized_symbol = symbol.strip() if symbol and symbol.strip() else None
+    symbol_obj: Optional[Symbol] = None
+    asset_class = ""
 
-    if provider is None:
+    if normalized_symbol:
+        symbol_obj = (
+            session.query(Symbol)
+            .filter(func.lower(Symbol.symbol) == normalized_symbol.lower())
+            .first()
+        )
+        if symbol_obj:
+            asset_class = _normalize_asset_class(symbol_obj.asset_class)
+            if asset_class == "CRYPTO":
+                logger.info(
+                    "Skipping news ingestion for crypto symbol %s", normalized_symbol
+                )
+                return 0
+        else:
+            logger.info(
+                "Symbol %s not found in DB; proceeding with news ingest without asset class gating",
+                normalized_symbol,
+            )
+
+    provider_config = get_provider_config(provider_config_path)
+    provider_cfg = None
+
+    if normalized_symbol and asset_class != "CRYPTO":
+        provider_cfg = next(
+            (
+                cfg
+                for cfg in provider_config.get_enabled_news_providers()
+                if cfg.provider_type.lower() == "yfinance"
+            ),
+            None,
+        )
+        if provider_cfg is None:
+            logger.debug(
+                "YFinance news provider not enabled; falling back to primary for %s",
+                normalized_symbol,
+            )
+
+    if provider_cfg is None:
+        provider_cfg = provider_config.get_primary_news_provider()
+
+    if provider_cfg is None:
         logger.warning("No enabled news provider found")
         return 0
+
+    provider = create_news_provider(provider_cfg)
 
     try:
         # Fetch news articles
         articles = provider.fetch_news(
-            symbol=symbol,
+            symbol=normalized_symbol,
             start_date=start_date,
             end_date=end_date,
             limit=limit,
@@ -422,7 +465,7 @@ def ingest_news_data(
                     title=article.title,
                     description=article.description,
                     url=article.url,
-                    published_at=article.published_at,
+                    published_at=ensure_aware(article.published_at),
                     author=article.author,
                     sentiment=article.sentiment,
                     sentiment_source="provider" if article.sentiment else None,
