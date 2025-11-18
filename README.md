@@ -17,15 +17,27 @@ Otonom Trader is a research-grade algorithmic trading system that combines:
 ```
 otonom_trader/
 ├── data/           # Database schema and data ingestion
+│   ├── schema.py              # Core ORM models (Symbol, DailyBar, Trade, etc.)
+│   └── schema_experiments.py  # Experiment tracking (Experiment, ExperimentRun)
 ├── analytics/      # Anomaly detection, regime analysis, LLM agents
 ├── domain/         # Core business models
 ├── patron/         # Multi-analyst decision engine
 ├── daemon/         # Production daemon and paper trader
 ├── eval/           # Backtesting and performance evaluation
-└── config/         # Strategy configuration loader
+│   ├── backtest.py            # Core backtest engine
+│   ├── performance_report.py  # Metrics calculation (CAGR, Sharpe, etc.)
+│   └── significance.py        # Statistical comparison of experiments
+├── research/       # Research infrastructure
+│   └── backtest_runner.py     # Unified backtest API
+├── strategy/       # Strategy configuration
+│   └── config.py              # StrategyConfig loader
+└── broker/         # Broker abstraction (Binance, etc.)
 
 strategies/         # YAML strategy definitions
+experiments/        # Experiment templates (param sweeps, ablations)
 scripts/            # Research and backtest runners
+├── run_grid_search.py              # Grid search automation
+└── promote_experiment_to_strategy.py  # Promote best runs to new versions
 reports/            # Generated performance reports
 ```
 
@@ -70,14 +82,45 @@ Navigate to `http://localhost:8501` to view:
 ### 3. Run Backtests
 
 ```bash
-# Run baseline_v1 strategy backtest
-python scripts/run_research_backtests.py --strategy baseline_v1
+# Run baseline_v1 strategy backtest using unified API
+python -m otonom_trader.cli backtest run \
+  --strategy strategies/baseline_v1.0.yaml \
+  --start 2018-01-01 \
+  --end 2024-12-31 \
+  --output reports/baseline_v1_backtest.json
 
-# Backtest specific symbols
-python scripts/run_research_backtests.py --strategy baseline_v1 --symbols BTC-USD ETH-USD
+# View backtest report
+python -m otonom_trader.cli backtest report \
+  --file reports/baseline_v1_backtest.json
 ```
 
-Results saved to `reports/baseline_v1_<timestamp>.html`
+### 4. Run Parameter Optimization Experiments
+
+```bash
+# Parameter sweep experiment (486 combinations)
+python scripts/run_grid_search.py \
+  --config experiments/param_sweep_baseline.yaml
+
+# Analyst ablation study (16 combinations)
+python scripts/run_grid_search.py \
+  --config experiments/ablation_analysts.yaml
+
+# View experiment results (SQL)
+sqlite3 data/trader.db "SELECT run_index, test_sharpe, test_cagr FROM experiment_runs WHERE experiment_id = 1 ORDER BY test_sharpe DESC LIMIT 10"
+```
+
+### 5. Promote Best Experiment to New Strategy Version
+
+```bash
+# Auto-select best run and promote to v1.1
+python scripts/promote_experiment_to_strategy.py \
+  --experiment-id 1 \
+  --output-path strategies/baseline_v1.1.yaml \
+  --new-version 1.1.0
+
+# View promotion history
+cat STRATEGY_LOG.md
+```
 
 ## Baseline v1 Strategy Performance
 
@@ -145,6 +188,109 @@ portfolio_constraints:
 
 See `strategies/baseline_v1.yaml` for full configuration.
 
+## Research Workflow
+
+### Experiment-Driven Strategy Optimization
+
+Otonom Trader provides a complete research infrastructure for systematic strategy optimization:
+
+```
+1. Design Experiment
+   ↓
+2. Run Grid Search
+   ↓
+3. Analyze Results
+   ↓
+4. Promote Best Run
+   ↓
+5. Deploy to Production
+```
+
+### 1. Design Experiment
+
+Create experiment config in `experiments/`:
+
+```yaml
+# experiments/my_experiment.yaml
+name: "baseline_v1_param_sweep"
+description: "Optimize risk and analyst weights"
+
+base_strategy: "strategies/baseline_v1.0.yaml"
+
+search_method: "grid"  # or "random"
+random_samples: 100    # if random
+
+split:
+  train_start: "2018-01-01"
+  train_end: "2021-12-31"
+  test_start: "2022-01-01"
+  test_end: "2024-12-31"
+
+parameters:
+  risk.risk_pct:
+    values: [0.5, 1.0, 1.5]
+  risk.stop_loss_pct:
+    values: [3.0, 5.0, 8.0]
+  ensemble.analyst_weights.tech:
+    values: [0.8, 1.0, 1.2]
+```
+
+### 2. Run Grid Search
+
+```bash
+python scripts/run_grid_search.py --config experiments/my_experiment.yaml
+```
+
+Results saved to `experiments` and `experiment_runs` database tables.
+
+### 3. Analyze Results
+
+```python
+# Python analysis
+from otonom_trader.data import get_session
+from otonom_trader.data.schema_experiments import Experiment
+from otonom_trader.eval.significance import compare_top_two
+
+with get_session() as session:
+    exp = session.query(Experiment).filter_by(name="baseline_v1_param_sweep").first()
+
+    # Compare top 2 runs
+    result = compare_top_two(exp.runs, n_obs=252*3)
+
+    if result.is_significant:
+        print(f"✓ Run #{result.run_a.run_index} significantly better (z={result.z_score:.2f})")
+    else:
+        print(f"✗ No significant difference")
+```
+
+### 4. Promote Best Run
+
+```bash
+# Promote to v1.1
+python scripts/promote_experiment_to_strategy.py \
+  --experiment-id 1 \
+  --output-path strategies/baseline_v1.1.yaml \
+  --new-version 1.1.0
+```
+
+This will:
+- Select best run by test Sharpe
+- Apply parameter overrides to base strategy
+- Save new strategy YAML
+- Log promotion to `STRATEGY_LOG.md`
+
+### 5. Deploy to Production
+
+```bash
+# Backtest new version
+python -m otonom_trader.cli backtest run \
+  --strategy strategies/baseline_v1.1.yaml \
+  --start 2018-01-01 --end 2024-12-31
+
+# Deploy to paper daemon
+otonom-trader daemon-once --strategy baseline_v1.1
+```
+
 ## CLI Commands
 
 ### Daemon Operations
@@ -205,19 +351,20 @@ pytest otonom_trader/tests/
 - [x] Paper trading daemon
 - [x] Monitoring dashboard
 
-### Phase 2: Research Infrastructure (Current)
+### Phase 2: Research Infrastructure ✅
 - [x] Strategy YAML configuration
 - [x] Backtest runner with performance metrics
-- [ ] Experiment tracking database
-- [ ] Grid search for parameter optimization
-- [ ] Statistical significance testing
+- [x] Experiment tracking database
+- [x] Grid search for parameter optimization
+- [x] Statistical significance testing
+- [x] Promotion workflow (v1 → v1.1/v2.0)
 
-### Phase 3: Production (Planned)
-- [ ] Broker abstraction layer
-- [ ] Shadow mode (parallel live/paper)
-- [ ] Kill-switch and guardrails
-- [ ] Alert engine (email, Telegram)
-- [ ] Packaging and distribution
+### Phase 3: Production ✅
+- [x] Broker abstraction layer (Binance + extensible)
+- [x] Shadow mode (PAPER/SHADOW/LIVE execution modes)
+- [x] Kill-switch and guardrails (daily loss, max DD, consecutive losses)
+- [x] Alert engine (email, Telegram)
+- [x] Packaging and distribution (pyproject.toml)
 
 ## License
 
