@@ -84,12 +84,44 @@ def init_db(engine: Engine = None) -> None:
     Initialize the database schema.
     Creates all tables defined in schema.py.
 
+    Gracefully handles existing tables and indexes.
+
     Args:
         engine: SQLAlchemy engine. If None, uses default engine.
     """
+    from sqlalchemy import inspect
+    from sqlalchemy.exc import OperationalError
     from .schema import Base
 
     eng = engine or get_engine()
     logger.info("Initializing database schema...")
-    Base.metadata.create_all(bind=eng)
-    logger.info("Database schema initialized successfully")
+
+    try:
+        # Create all tables with checkfirst=True (default behavior)
+        Base.metadata.create_all(bind=eng, checkfirst=True)
+        logger.info("Database schema initialized successfully")
+    except OperationalError as e:
+        error_msg = str(e)
+
+        # If it's an "already exists" error, that's fine - tables/indexes are there
+        if "already exists" in error_msg.lower():
+            logger.info("Database schema already exists (some tables/indexes present)")
+
+            # Try to create missing tables individually
+            inspector = inspect(eng)
+            existing_tables = inspector.get_table_names()
+
+            for table in Base.metadata.sorted_tables:
+                if table.name not in existing_tables:
+                    try:
+                        table.create(bind=eng, checkfirst=True)
+                        logger.info(f"Created missing table: {table.name}")
+                    except OperationalError as table_error:
+                        if "already exists" not in str(table_error).lower():
+                            logger.warning(f"Could not create table {table.name}: {table_error}")
+
+            logger.info("Database schema verification complete")
+        else:
+            # Some other error - re-raise it
+            logger.error(f"Database initialization failed: {e}")
+            raise
