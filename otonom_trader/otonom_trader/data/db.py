@@ -92,7 +92,7 @@ def init_db(engine: Engine = None) -> None:
     from .schema_intraday_and_portfolio import (  # Ensure intraday/portfolio schema is loaded
         IntradayBar,
         PortfolioPosition,
-        PortfolioSnapshot,
+        # Note: PortfolioSnapshot is in schema.py, not here (duplicate table name)
     )
 
     eng = engine or get_engine()
