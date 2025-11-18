@@ -195,9 +195,7 @@ def _run_core_backtest(
     """
     Run core backtest engine.
 
-    This is a placeholder that should connect to your existing backtest engine.
-    For now, it's a simplified implementation that assumes decisions already exist
-    in the database and simulates trades based on them.
+    Connects to the actual portfolio backtest engine and saves results to database.
 
     Args:
         session: Database session
@@ -206,19 +204,134 @@ def _run_core_backtest(
         end_date: End date
         universe: List of symbols to trade
     """
-    # TODO: Connect to your actual backtest engine
-    # For now, this is a placeholder that assumes:
-    # 1. Decisions already exist in the database
-    # 2. We simulate trades based on decisions
-    # 3. We write Trade and PortfolioSnapshot records
+    from ..eval.portfolio_backtest import run_backtest
 
     logger.info(f"Running backtest: {strategy_cfg.name} v{strategy_cfg.version}")
     logger.info(f"Period: {start_date} to {end_date}")
     logger.info(f"Universe: {universe}")
 
-    # This would call your existing backtest engine
-    # Example: from ..eval.portfolio_backtest import run_backtest
-    pass
+    # Get risk parameters from strategy config
+    risk_pct = strategy_cfg.get("risk.risk_pct", 0.01)  # Default 1%
+    initial_capital = strategy_cfg.get_initial_capital()
+
+    # Clear existing trades and portfolio snapshots for this strategy/period
+    session.query(TradeORM).filter(
+        TradeORM.strategy_name == strategy_cfg.name,
+        TradeORM.strategy_version == strategy_cfg.version,
+        TradeORM.entry_date >= start_date,
+        TradeORM.exit_date <= end_date,
+    ).delete(synchronize_session=False)
+
+    session.query(PortfolioSnapshot).filter(
+        PortfolioSnapshot.timestamp >= start_date,
+        PortfolioSnapshot.timestamp <= end_date,
+    ).delete(synchronize_session=False)
+
+    session.commit()
+
+    # Run backtest for each symbol in universe
+    all_trades = []
+    all_equity_points = []
+
+    for symbol in universe:
+        logger.info(f"  Backtesting {symbol}...")
+
+        try:
+            result = run_backtest(
+                session=session,
+                symbol=symbol,
+                start_date=start_date.isoformat(),
+                end_date=end_date.isoformat(),
+                initial_cash=initial_capital / len(universe),  # Split capital across universe
+                risk_per_trade=risk_pct,
+                use_ensemble=True,
+            )
+
+            if not result:
+                logger.warning(f"  No results for {symbol}, skipping")
+                continue
+
+            # Get symbol ID
+            symbol_obj = session.query(Symbol).filter_by(symbol=symbol).first()
+            if not symbol_obj:
+                logger.warning(f"  Symbol {symbol} not found in database")
+                continue
+
+            # Save trades to database
+            for trade_data in result.get("trades", []):
+                # Calculate holding days
+                entry_dt = trade_data["entry_date"]
+                exit_dt = trade_data["exit_date"]
+                holding_days = (exit_dt - entry_dt).days if isinstance(exit_dt, date) else 0
+
+                # Calculate R-multiple (simplified: PnL / initial risk)
+                initial_risk = trade_data["quantity"] * trade_data["entry_price"] * risk_pct
+                r_multiple = trade_data["pnl"] / initial_risk if initial_risk > 0 else 0.0
+
+                trade_orm = TradeORM(
+                    symbol_id=symbol_obj.id,
+                    strategy_name=strategy_cfg.name,
+                    strategy_version=strategy_cfg.version,
+                    entry_date=trade_data["entry_date"],
+                    exit_date=trade_data["exit_date"],
+                    direction=trade_data["direction"],
+                    entry_price=trade_data["entry_price"],
+                    exit_price=trade_data["exit_price"],
+                    quantity=trade_data["quantity"],
+                    pnl=trade_data["pnl"],
+                    pnl_pct=trade_data["pnl_pct"],
+                    r_multiple=r_multiple,
+                    holding_days=holding_days,
+                    initial_risk=initial_risk,
+                    stop_loss_price=None,  # Not tracked in simple backtest
+                    take_profit_price=None,  # Not tracked in simple backtest
+                )
+                session.add(trade_orm)
+                all_trades.append(trade_data)
+
+            # Collect equity curve points
+            equity_curve = result.get("equity_curve", [])
+            dates_list = result.get("dates", [])
+
+            for i, equity_val in enumerate(equity_curve):
+                if i < len(dates_list):
+                    all_equity_points.append({
+                        "date": dates_list[i],
+                        "equity": equity_val,
+                        "symbol": symbol,
+                    })
+
+            logger.info(f"  {symbol}: {len(result.get('trades', []))} trades")
+
+        except Exception as e:
+            logger.error(f"  Error backtesting {symbol}: {e}")
+            continue
+
+    # Aggregate equity curves across symbols (simplified portfolio equity)
+    if all_equity_points:
+        # Group by date and sum equity
+        equity_df = pd.DataFrame(all_equity_points)
+        if not equity_df.empty:
+            portfolio_equity = equity_df.groupby("date")["equity"].sum().reset_index()
+
+            # Calculate drawdown
+            cummax = portfolio_equity["equity"].cummax()
+            drawdown = ((portfolio_equity["equity"] - cummax) / cummax * 100)
+
+            # Save portfolio snapshots
+            for idx, row in portfolio_equity.iterrows():
+                snapshot = PortfolioSnapshot(
+                    timestamp=row["date"],
+                    equity=row["equity"],
+                    cash=row["equity"],  # Simplified: assume all equity is cash when not in positions
+                    positions_value=0.0,
+                    max_drawdown=drawdown.iloc[idx],
+                    daily_pnl=0.0,  # Not calculated in simple version
+                )
+                session.add(snapshot)
+
+    session.commit()
+    logger.info(f"Backtest engine complete: {len(all_trades)} total trades across {len(universe)} symbols")
 
 
 def _collect_trades(
