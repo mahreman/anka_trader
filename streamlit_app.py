@@ -460,6 +460,183 @@ def main():
             col3.metric("Decisions", total_decisions)
             col4.metric("Trades", total_trades)
 
+            # Orchestrator & Config Controls
+            st.markdown("---")
+            st.markdown("**Orchestrator & Configuration**")
+
+            from pathlib import Path
+            import yaml
+
+            CONFIG_DIR = Path("config")
+            ORCH_CONFIG_PATH = CONFIG_DIR / "orchestrator.yaml"
+            BROKER_CONFIG_PATH = CONFIG_DIR / "broker.yaml"
+            ALERTS_CONFIG_PATH = CONFIG_DIR / "alerts.yaml"
+
+            def _load_yaml(path: Path) -> dict:
+                if not path.exists():
+                    return {}
+                try:
+                    with path.open("r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f) or {}
+                    return data
+                except Exception:
+                    return {}
+
+            def _save_yaml(path: Path, data: dict) -> None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("w", encoding="utf-8") as f:
+                    yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+            # ===== Orchestrator settings =====
+            orch_cfg = _load_yaml(ORCH_CONFIG_PATH)
+            orch_section = orch_cfg.get("orchestrator", {})
+
+            enabled = st.checkbox(
+                "Enable Orchestrator Loop",
+                value=orch_section.get("enabled", True),
+                help="If disabled, the orchestrator will not run new daemon cycles.",
+            )
+            interval_seconds = st.number_input(
+                "Loop Interval (seconds)",
+                min_value=60,
+                max_value=3600,
+                value=int(orch_section.get("interval_seconds", 900)),
+                help="Default is 900 seconds (15 minutes).",
+            )
+            use_ensemble = st.checkbox(
+                "Use Ensemble Mode",
+                value=orch_section.get("use_ensemble", True),
+            )
+            paper_trade_enabled = st.checkbox(
+                "Paper Trading Enabled",
+                value=orch_section.get("paper_trade_enabled", True),
+            )
+            paper_trade_risk_pct = st.number_input(
+                "Risk per Trade (%)",
+                min_value=0.1,
+                max_value=10.0,
+                value=float(orch_section.get("paper_trade_risk_pct", 1.0)),
+            )
+            initial_cash = st.number_input(
+                "Initial Cash",
+                min_value=1000.0,
+                max_value=10_000_000.0,
+                value=float(orch_section.get("initial_cash", 100_000.0)),
+                step=1000.0,
+            )
+            ingest_days_back = st.number_input(
+                "Ingest Days Back",
+                min_value=1,
+                max_value=365,
+                value=int(orch_section.get("ingest_days_back", 7)),
+            )
+            anomaly_lookback_days = st.number_input(
+                "Anomaly Lookback Days",
+                min_value=1,
+                max_value=365,
+                value=int(orch_section.get("anomaly_lookback_days", 30)),
+            )
+
+            # ===== Broker settings (config/broker.yaml) =====
+            st.markdown("**Broker Configuration (binance)**")
+            broker_cfg = _load_yaml(BROKER_CONFIG_PATH)
+
+            broker_kind = st.text_input(
+                "Broker Kind",
+                value=str(broker_cfg.get("kind", "binance")),
+            )
+            broker_base_url = st.text_input(
+                "Base URL",
+                value=str(broker_cfg.get("base_url", "https://testnet.binance.vision")),
+            )
+            broker_testnet = st.checkbox(
+                "Use Testnet",
+                value=bool(broker_cfg.get("testnet", True)),
+            )
+            broker_api_key = st.text_input(
+                "API Key",
+                value=str(broker_cfg.get("api_key", "")),
+                type="password",
+            )
+            broker_api_secret = st.text_input(
+                "API Secret",
+                value=str(broker_cfg.get("api_secret", "")),
+                type="password",
+            )
+
+            # ===== Alerts settings (config/alerts.yaml) =====
+            st.markdown("**Alert Configuration**")
+            alerts_cfg = _load_yaml(ALERTS_CONFIG_PATH)
+            email_cfg = alerts_cfg.get("email", {})
+            telegram_cfg = alerts_cfg.get("telegram", {})
+
+            email_enabled = st.checkbox(
+                "Email Alerts Enabled",
+                value=bool(email_cfg.get("enabled", False)),
+            )
+            email_to = st.text_input(
+                "Email To",
+                value=str(email_cfg.get("to", "")),
+            )
+
+            telegram_enabled = st.checkbox(
+                "Telegram Alerts Enabled",
+                value=bool(telegram_cfg.get("enabled", False)),
+            )
+            telegram_bot_token = st.text_input(
+                "Telegram Bot Token",
+                value=str(telegram_cfg.get("bot_token", "")),
+                type="password",
+            )
+            telegram_chat_id = st.text_input(
+                "Telegram Chat ID",
+                value=str(telegram_cfg.get("chat_id", "")),
+            )
+
+            if st.button("💾 Save Configuration"):
+                # Orchestrator config
+                new_orch = {
+                    "enabled": enabled,
+                    "interval_seconds": int(interval_seconds),
+                    "use_ensemble": bool(use_ensemble),
+                    "paper_trade_enabled": bool(paper_trade_enabled),
+                    "paper_trade_risk_pct": float(paper_trade_risk_pct),
+                    "initial_cash": float(initial_cash),
+                    "ingest_days_back": int(ingest_days_back),
+                    "anomaly_lookback_days": int(anomaly_lookback_days),
+                }
+                _save_yaml(ORCH_CONFIG_PATH, {"orchestrator": new_orch})
+
+                # Broker config
+                new_broker = dict(broker_cfg)
+                new_broker.update(
+                    {
+                        "kind": broker_kind,
+                        "base_url": broker_base_url,
+                        "testnet": bool(broker_testnet),
+                    }
+                )
+                if broker_api_key:
+                    new_broker["api_key"] = broker_api_key
+                if broker_api_secret:
+                    new_broker["api_secret"] = broker_api_secret
+                _save_yaml(BROKER_CONFIG_PATH, new_broker)
+
+                # Alerts config
+                new_alerts = dict(alerts_cfg)
+                new_alerts["email"] = dict(email_cfg)
+                new_alerts["email"]["enabled"] = bool(email_enabled)
+                new_alerts["email"]["to"] = email_to
+
+                new_alerts["telegram"] = dict(telegram_cfg)
+                new_alerts["telegram"]["enabled"] = bool(telegram_enabled)
+                new_alerts["telegram"]["bot_token"] = telegram_bot_token
+                new_alerts["telegram"]["chat_id"] = telegram_chat_id
+
+                _save_yaml(ALERTS_CONFIG_PATH, new_alerts)
+
+                st.success("Configuration saved. Orchestrator will pick up changes on next cycle.")
+
 
 if __name__ == "__main__":
     main()
