@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..data import get_session
 from ..data.ingest import ingest_incremental
 from ..data.ingest_providers import ingest_intraday_bars_all, ingest_news_data
-from ..data.symbols import get_p0_assets
+from ..data.symbols import get_p0_assets, ensure_p0_symbols
 from ..data.schema import DaemonRun, Symbol, Anomaly as AnomalyORM
 from ..analytics import detect_anomalies_all_assets
 from ..patron import run_daily_decision_pass
@@ -121,6 +121,9 @@ def run_daemon_cycle(
         # Step 1: Incremental data ingest
         logger.info("\n[1/4] Incremental data ingest...")
         assets = get_p0_assets()
+        seeded = ensure_p0_symbols(session)
+        if seeded:
+            logger.info("  Seeded %s missing symbols before ingest", seeded)
 
         if config.price_interval.lower() == "1d":
             ingest_results = ingest_incremental(
@@ -140,11 +143,19 @@ def run_daemon_cycle(
         # News ingest for non-crypto assets
         logger.info("  Ingesting news data...")
         total_news = 0
+        news_window_end = utc_now()
+        news_window_start = news_window_end - timedelta(days=config.ingest_days_back)
         for asset in assets:
             if asset.asset_class == AssetClass.CRYPTO:
                 continue
             try:
-                news_count = ingest_news_data(session, symbol=asset.symbol, limit=5)
+                news_count = ingest_news_data(
+                    session,
+                    symbol=asset.symbol,
+                    start_date=news_window_start,
+                    end_date=news_window_end,
+                    limit=5,
+                )
                 total_news += news_count
             except Exception as e:
                 logger.error(f"News ingest failed for {asset.symbol}: {e}")

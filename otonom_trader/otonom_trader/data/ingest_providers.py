@@ -448,6 +448,8 @@ def ingest_news_data(
 
         # Upsert articles
         count = 0
+        normalized_upper = normalized_symbol.upper() if normalized_symbol else None
+
         for article in articles:
             # Check if article exists (by URL)
             existing = session.query(NewsArticle).filter_by(url=article.url).first()
@@ -458,7 +460,13 @@ def ingest_news_data(
                 existing.sentiment_source = "provider"
             else:
                 # Insert new
-                symbols_str = ",".join(article.symbols) if article.symbols else None
+                symbols_list = [s for s in (article.symbols or []) if s]
+                if normalized_symbol:
+                    if not any(
+                        (sym or "").upper() == normalized_upper for sym in symbols_list
+                    ):
+                        symbols_list.append(normalized_symbol)
+                symbols_str = ",".join(symbols_list) if symbols_list else None
 
                 new_article = NewsArticle(
                     source=article.source,
