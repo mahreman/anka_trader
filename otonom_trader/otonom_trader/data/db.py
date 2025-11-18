@@ -87,6 +87,7 @@ def init_db(engine: Engine = None) -> None:
     Args:
         engine: SQLAlchemy engine. If None, uses default engine.
     """
+    from sqlalchemy import inspect
     from .schema import Base
     from .schema_experiments import Experiment, ExperimentRun  # Ensure experiments schema is loaded
     from .schema_intraday_and_portfolio import (  # Ensure intraday/portfolio schema is loaded
@@ -98,15 +99,40 @@ def init_db(engine: Engine = None) -> None:
     eng = engine or get_engine()
     logger.info("Initializing database schema...")
 
-    try:
-        # Create all tables (checkfirst=True is default, so it won't recreate existing tables)
-        Base.metadata.create_all(bind=eng, checkfirst=True)
-        logger.info("Database schema initialized successfully")
-    except Exception as e:
-        # If there's an error about existing indexes/tables, that's OK - continue
-        error_msg = str(e).lower()
-        if "already exists" in error_msg:
-            logger.warning(f"Some database objects already exist (this is OK): {e}")
-            logger.info("Database schema is ready")
-        else:
-            raise
+    # Get list of existing tables
+    inspector = inspect(eng)
+    existing_tables = inspector.get_table_names()
+
+    # Create tables one by one to handle errors gracefully
+    created_count = 0
+    skipped_count = 0
+    error_count = 0
+
+    for table in Base.metadata.sorted_tables:
+        table_name = table.name
+
+        if table_name in existing_tables:
+            logger.debug(f"Table '{table_name}' already exists, skipping")
+            skipped_count += 1
+            continue
+
+        try:
+            logger.info(f"Creating table: {table_name}")
+            table.create(bind=eng, checkfirst=True)
+            created_count += 1
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "already exists" in error_msg:
+                logger.warning(f"Table/index '{table_name}' already exists (skipping): {e}")
+                skipped_count += 1
+            else:
+                logger.error(f"Failed to create table '{table_name}': {e}")
+                error_count += 1
+
+    # Summary
+    logger.info(f"Database initialization complete: {created_count} created, {skipped_count} skipped, {error_count} errors")
+
+    if error_count > 0:
+        logger.warning(f"Some tables failed to create ({error_count} errors). Database may be incomplete.")
+    else:
+        logger.info("Database schema is ready")
