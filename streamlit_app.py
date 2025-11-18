@@ -11,13 +11,16 @@ Usage:
     streamlit run streamlit_app.py
 """
 
+from pathlib import Path
+from datetime import datetime, timedelta, date
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta, date
 from sqlalchemy.orm import Session
+import yaml
 
-from otonom_trader.data import get_session, get_engine
+from otonom_trader.data import get_session
 from otonom_trader.data.schema import (
     Symbol,
     Anomaly,
@@ -25,6 +28,12 @@ from otonom_trader.data.schema import (
     PortfolioSnapshot,
     PaperTrade,
     DaemonRun,
+)
+from otonom_trader.orchestrator import (
+    load_orchestrator_config,
+    ensure_default_config_exists,
+    save_orchestrator_config,
+    ORCH_CONFIG_PATH,
 )
 
 # Page configuration
@@ -53,6 +62,31 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+
+def _load_yaml(path: Path) -> dict:
+    """Load YAML file if it exists."""
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return yaml.safe_load(fh) or {}
+    except Exception:
+        return {}
+
+
+def _save_yaml(path: Path, data: dict) -> None:
+    """Persist YAML content to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        yaml.safe_dump(data, fh, sort_keys=False, allow_unicode=True)
+
+
+def get_strategy_files(strategy_dir: Path = Path("strategies")) -> list[Path]:
+    """Return available strategy YAML files for orchestrator selection."""
+    if not strategy_dir.exists():
+        return []
+    return sorted(p for p in strategy_dir.glob("*.yaml") if p.is_file())
 
 
 def get_recent_anomalies(session: Session, days: int = 7) -> pd.DataFrame:
@@ -266,11 +300,66 @@ def main():
     st.title("📈 Otonom Trader - Portfolio Dashboard")
     st.markdown("Real-time monitoring of autonomous trading system")
 
+    ensure_default_config_exists()
+    orchestrator_cfg = load_orchestrator_config()
+    strategy_dir = Path("strategies")
+    strategy_files = get_strategy_files(strategy_dir)
+
     # Sidebar
     with st.sidebar:
         st.header("⚙️ Settings")
         lookback_days = st.slider("Lookback Days", 1, 30, 7)
         auto_refresh = st.checkbox("Auto Refresh (60s)", value=False)
+
+        st.markdown("---")
+        st.subheader("🛠️ Orchestrator Control")
+        mode_options = ["paper", "shadow", "live"]
+        current_mode = orchestrator_cfg.mode if orchestrator_cfg.mode in mode_options else "paper"
+        mode_index = mode_options.index(current_mode)
+        selected_strategy_name = None
+
+        with st.form("orchestrator_settings"):
+            selected_mode = st.selectbox(
+                "Execution Mode",
+                mode_options,
+                index=mode_index,
+                key="orchestrator_mode",
+            )
+
+            if strategy_files:
+                strategy_names = [p.name for p in strategy_files]
+                cfg_strategy_name = Path(orchestrator_cfg.strategy_path).name
+                strategy_index = strategy_names.index(cfg_strategy_name) if cfg_strategy_name in strategy_names else 0
+                selected_strategy_name = st.selectbox(
+                    "Strategy",
+                    strategy_names,
+                    index=strategy_index,
+                    key="orchestrator_strategy",
+                )
+            else:
+                st.info("No strategy YAML files found in the strategies/ directory.")
+
+            submitted = st.form_submit_button("Save Orchestrator Settings")
+
+        if submitted:
+            updated = False
+            if selected_mode != orchestrator_cfg.mode:
+                orchestrator_cfg.mode = selected_mode
+                updated = True
+
+            if selected_strategy_name:
+                new_strategy_path = str(strategy_dir / selected_strategy_name)
+                if orchestrator_cfg.strategy_path != new_strategy_path:
+                    orchestrator_cfg.strategy_path = new_strategy_path
+                    updated = True
+
+            if updated:
+                save_orchestrator_config(orchestrator_cfg)
+                st.success("Orchestrator configuration updated.")
+            else:
+                st.info("No changes to orchestrator configuration.")
+
+        st.caption(f"Config file: {ORCH_CONFIG_PATH}")
 
         st.markdown("---")
         st.markdown("### About")
@@ -459,6 +548,104 @@ def main():
             col2.metric("Anomalies", total_anomalies)
             col3.metric("Decisions", total_decisions)
             col4.metric("Trades", total_trades)
+
+            st.markdown("---")
+            st.markdown("### Orchestrator Configuration")
+
+            orch_cfg = _load_yaml(ORCH_CONFIG_PATH)
+            orch_section = orch_cfg.get("orchestrator", {})
+
+            enabled = st.checkbox(
+                "Enable Orchestrator Loop",
+                value=orch_section.get("enabled", True),
+                help="If disabled, the orchestrator will not run new daemon cycles.",
+            )
+
+            mode_options = ["paper", "shadow", "live"]
+            mode_value = str(orch_section.get("mode", "paper")).lower()
+            if mode_value not in mode_options:
+                mode_value = "paper"
+            mode = st.selectbox(
+                "Execution Mode",
+                options=mode_options,
+                index=mode_options.index(mode_value),
+                help="paper: only paper trading, shadow: paper + real broker, live: only real broker.",
+            )
+
+            interval_seconds = st.number_input(
+                "Loop Interval (seconds)",
+                min_value=60,
+                max_value=3600,
+                value=int(orch_section.get("interval_seconds", 900)),
+                help="Default is 900 seconds (15 minutes).",
+            )
+
+            db_path = st.text_input(
+                "DB Path",
+                value=str(orch_section.get("db_path", "data/trader.db")),
+            )
+            strategy_path = st.text_input(
+                "Strategy YAML Path",
+                value=str(orch_section.get("strategy_path", "strategies/baseline_v1.0.yaml")),
+            )
+            broker_cfg_path = st.text_input(
+                "Broker Config Path",
+                value=str(orch_section.get("broker_config_path", "config/broker.yaml")),
+            )
+
+            use_ensemble = st.checkbox(
+                "Use Ensemble Mode",
+                value=orch_section.get("use_ensemble", True),
+            )
+            paper_trade_enabled = st.checkbox(
+                "Paper Trading Enabled (base)",
+                value=orch_section.get("paper_trade_enabled", True),
+                help="Note: actual behavior is overridden by mode.",
+            )
+            paper_trade_risk_pct = st.number_input(
+                "Risk per Trade (%)",
+                min_value=0.1,
+                max_value=10.0,
+                value=float(orch_section.get("paper_trade_risk_pct", 1.0)),
+                step=0.1,
+            )
+            initial_cash = st.number_input(
+                "Initial Cash",
+                min_value=1000.0,
+                max_value=10_000_000.0,
+                value=float(orch_section.get("initial_cash", 100_000.0)),
+                step=1000.0,
+            )
+            ingest_days_back = st.number_input(
+                "Ingest Days Back",
+                min_value=1,
+                max_value=365,
+                value=int(orch_section.get("ingest_days_back", 7)),
+            )
+            anomaly_lookback_days = st.number_input(
+                "Anomaly Lookback Days",
+                min_value=1,
+                max_value=365,
+                value=int(orch_section.get("anomaly_lookback_days", 30)),
+            )
+
+            if st.button("💾 Save Configuration"):
+                new_orch = {
+                    "enabled": enabled,
+                    "mode": mode,
+                    "interval_seconds": int(interval_seconds),
+                    "db_path": db_path,
+                    "strategy_path": strategy_path,
+                    "broker_config_path": broker_cfg_path,
+                    "use_ensemble": bool(use_ensemble),
+                    "paper_trade_enabled": bool(paper_trade_enabled),
+                    "paper_trade_risk_pct": float(paper_trade_risk_pct),
+                    "initial_cash": float(initial_cash),
+                    "ingest_days_back": int(ingest_days_back),
+                    "anomaly_lookback_days": int(anomaly_lookback_days),
+                }
+                _save_yaml(ORCH_CONFIG_PATH, {"orchestrator": new_orch})
+                st.success("Orchestrator configuration saved.")
 
 
 if __name__ == "__main__":

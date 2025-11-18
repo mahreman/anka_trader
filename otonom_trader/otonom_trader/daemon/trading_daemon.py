@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, date
+from enum import Enum
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -16,15 +17,24 @@ from otonom_trader.data import get_engine, init_db, get_session
 from otonom_trader.data.schema import Symbol, Decision
 from otonom_trader.brokers import create_broker
 from otonom_trader.daemon.broker_integration import ShadowModeExecutor
-from otonom_trader.alerts.engine import check_alerts
+from otonom_trader.alerts.engine import AlertEngine
 
 logger = logging.getLogger(__name__)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(name)s - %(levelname)s - %(message)s",
-)
+class ExecutionMode(Enum):
+    """Execution modes supported by the trading daemon."""
+
+    PAPER = "paper"
+    SHADOW = "shadow"
+    LIVE = "live"
+
+    @classmethod
+    def from_str(cls, value: str) -> "ExecutionMode":
+        normalized = (value or "").lower()
+        for member in cls:
+            if member.value == normalized:
+                return member
+        return cls.PAPER
 
 
 class TradingDaemon:
@@ -47,6 +57,8 @@ class TradingDaemon:
         self,
         db_path: str = "trader.db",
         broker_config_path: str = "config/broker.yaml",
+        strategy_path: str = "strategies/baseline_v1.0.yaml",
+        mode: ExecutionMode = ExecutionMode.PAPER,
     ):
         """
         Initialize trading daemon.
@@ -54,9 +66,13 @@ class TradingDaemon:
         Args:
             db_path: Database path
             broker_config_path: Broker configuration path
+            strategy_path: Strategy configuration used for broker execution
+            mode: Execution mode (paper/shadow/live)
         """
         self.db_path = db_path
         self.broker_config_path = broker_config_path
+        self.strategy_path = strategy_path
+        self.mode = mode
 
         # Initialize database
         self.engine = get_engine(db_path)
@@ -66,13 +82,19 @@ class TradingDaemon:
         self.broker = create_broker(config_path=broker_config_path)
         logger.info("Broker initialized")
 
-        # Create shadow mode executor
+        enable_broker_orders = self.mode != ExecutionMode.PAPER
         self.shadow_executor = ShadowModeExecutor(
             broker=self.broker,
-            enable_broker_orders=True,  # Set False to disable broker calls
+            enable_broker_orders=enable_broker_orders,
             log_to_database=True,
         )
-        logger.info("Shadow mode executor initialized")
+        logger.info(
+            "Shadow mode executor initialized (mode=%s, broker_orders=%s)",
+            self.mode.value,
+            enable_broker_orders,
+        )
+
+        self.alert_engine = AlertEngine()
 
     def run_once(self, current_date: Optional[date] = None) -> None:
         """
@@ -90,9 +112,14 @@ class TradingDaemon:
         if current_date is None:
             current_date = date.today()
 
-        logger.info(f"=== Daemon tick at {datetime.utcnow().isoformat()} ===")
+        logger.info(
+            "=== Daemon tick at %s | mode=%s | strategy=%s ===",
+            datetime.utcnow().isoformat(),
+            self.mode.value,
+            self.strategy_path,
+        )
 
-        with get_session(self.db_path) as session:
+        with get_session() as session:
             # Step 1: Ingest incremental data (TODO: implement)
             # self._ingest_incremental_data(session, current_date)
 
@@ -199,21 +226,7 @@ class TradingDaemon:
         Args:
             session: Database session
         """
-        alerts = check_alerts(
-            session=session,
-            max_dd_threshold=-20.0,
-            max_daemon_staleness_hours=2,
-            max_days_without_trade=7,
-            max_data_staleness_hours=24,
-        )
-
-        if alerts:
-            logger.warning(f"Found {len(alerts)} alerts")
-            for alert in alerts:
-                logger.warning(f"  {alert.level}: {alert.message}")
-
-            # TODO: Send to notification channels
-            # send_alerts(alerts, channels=["email", "slack"])
+        self.alert_engine.check_and_notify(datetime.utcnow())
 
     def run_loop(self, interval_seconds: int = 3600) -> None:
         """
