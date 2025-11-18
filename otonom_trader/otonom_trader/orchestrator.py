@@ -132,15 +132,20 @@ def run_orchestrator_loop() -> None:
                 "Orchestrator disabled in config. Sleeping for %ds before re-checking...",
                 sleep_for,
             )
+            # Sleep in 1-second intervals to allow Ctrl+C to work
+            remaining = sleep_for
             try:
-                time.sleep(sleep_for)
+                while remaining > 0:
+                    sleep_chunk = min(remaining, 1.0)
+                    time.sleep(sleep_chunk)
+                    remaining -= sleep_chunk
             except KeyboardInterrupt:
                 logger.info("Orchestrator stopped by user.")
                 break
             continue
 
         cycle += 1
-        start_time = datetime.utcnow()
+        start_time = datetime.now()
         logger.info(
             "===== Orchestrator cycle #%d starting at %s =====",
             cycle,
@@ -148,7 +153,8 @@ def run_orchestrator_loop() -> None:
         )
 
         try:
-            with get_session() as session:
+            session = next(get_session())
+            try:
                 # DaemonConfig oluştur
                 daemon_cfg = DaemonConfig(
                     ingest_days_back=cfg.ingest_days_back,
@@ -174,8 +180,11 @@ def run_orchestrator_loop() -> None:
                     run.status,
                 )
 
-            # Alert engine ile sağlık kontrolü
-            alerts.check_and_notify(datetime.utcnow())
+                # Alert engine ile sağlık kontrolü
+                alerts.check_and_notify(datetime.now())
+
+            finally:
+                session.close()
 
         except KeyboardInterrupt:
             logger.info("Orchestrator stopped by user.")
@@ -183,7 +192,7 @@ def run_orchestrator_loop() -> None:
         except Exception as e:
             logger.error(f"Orchestrator cycle #{cycle} failed: {e}", exc_info=True)
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now()
         elapsed = (end_time - start_time).total_seconds()
         target_interval = max(cfg.interval_seconds, 60)
         sleep_for = max(target_interval - elapsed, 0)
@@ -195,8 +204,13 @@ def run_orchestrator_loop() -> None:
             sleep_for,
         )
 
+        # Sleep in 1-second intervals to allow Ctrl+C to work
+        remaining = sleep_for
         try:
-            time.sleep(sleep_for)
+            while remaining > 0:
+                sleep_chunk = min(remaining, 1.0)
+                time.sleep(sleep_chunk)
+                remaining -= sleep_chunk
         except KeyboardInterrupt:
             logger.info("Orchestrator stopped by user.")
             break
