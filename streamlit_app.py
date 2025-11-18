@@ -659,6 +659,16 @@ def main():
 
     # Get database session
     with get_session() as session:
+        # DEBUG: hangi DB'ye bağlıyız, kaç daemon_run var?
+        engine = session.get_bind()
+        from otonom_trader.data.schema import DaemonRun
+
+        db_url = str(engine.url)
+        run_count = session.query(DaemonRun).count()
+
+        st.markdown(f"**DEBUG DB URL:** `{db_url}`")
+        st.markdown(f"**DEBUG daemon_runs count:** {run_count}")
+
         # ============================================================
         # SECTION 1: Overview Metrics
         # ============================================================
