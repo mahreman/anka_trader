@@ -88,8 +88,25 @@ def init_db(engine: Engine = None) -> None:
         engine: SQLAlchemy engine. If None, uses default engine.
     """
     from .schema import Base
+    from .schema_experiments import Experiment, ExperimentRun  # Ensure experiments schema is loaded
+    from .schema_intraday_and_portfolio import (  # Ensure intraday/portfolio schema is loaded
+        IntradayBar,
+        PortfolioPosition,
+        PortfolioSnapshot,
+    )
 
     eng = engine or get_engine()
     logger.info("Initializing database schema...")
-    Base.metadata.create_all(bind=eng)
-    logger.info("Database schema initialized successfully")
+
+    try:
+        # Create all tables (checkfirst=True is default, so it won't recreate existing tables)
+        Base.metadata.create_all(bind=eng, checkfirst=True)
+        logger.info("Database schema initialized successfully")
+    except Exception as e:
+        # If there's an error about existing indexes/tables, that's OK - continue
+        error_msg = str(e).lower()
+        if "already exists" in error_msg:
+            logger.warning(f"Some database objects already exist (this is OK): {e}")
+            logger.info("Database schema is ready")
+        else:
+            raise
