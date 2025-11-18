@@ -1,316 +1,216 @@
 """
-Autonomous trading daemon.
-P3 preparation: Full pipeline automation.
+Daemon loop for the autonomous trading system.
 
-Pipeline:
-1. Incremental data ingest
+This module coordinates:
+1. Incremental data ingest (prices, news, macro)
 2. Anomaly detection
 3. Patron decision generation
 4. Paper trade execution
+
+The daemon is intended to be called periodically by the orchestrator.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
+
 import logging
-import time
-from datetime import date, timedelta
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from ..data import get_session
-from ..data.ingest import ingest_incremental
-from ..data.ingest_providers import ingest_intraday_bars_all, ingest_news_data
-from ..data.symbols import ensure_p0_symbols, get_tracked_assets
-from ..data.schema import DaemonRun, Symbol, Anomaly as AnomalyORM
-from ..analytics import detect_anomalies_all_assets
-from ..patron import run_daily_decision_pass
-from ..domain import Decision as DecisionDomain, AnomalyType, AssetClass
-from ..config import (
-    ANOMALY_ZSCORE_THRESHOLD,
-    ANOMALY_VOLUME_QUANTILE,
-    ANOMALY_ROLLING_WINDOW,
+from otonom_trader.analytics.anomaly import detect_anomalies_for_universe
+from otonom_trader.data.ingest import ingest_incremental
+from otonom_trader.data.ingest_providers import (
+    ingest_intraday_bars_all,
+    ingest_news_for_universe,
+    ingest_macro_for_universe,
 )
-from .paper_trader import PaperTrader
-from ..utils import utc_now
+from otonom_trader.data.schema import DaemonRun
+from otonom_trader.patron.rules import run_patron_decisions
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 
+@dataclass
 class DaemonConfig:
-    """Configuration for daemon runs."""
+    """
+    Configuration for a single daemon run.
 
-    def __init__(
-        self,
-        ingest_days_back: int = 7,
-        anomaly_lookback_days: int = 30,
-        anomaly_k: float = ANOMALY_ZSCORE_THRESHOLD,
-        anomaly_q: float = ANOMALY_VOLUME_QUANTILE,
-        anomaly_window: int = ANOMALY_ROLLING_WINDOW,
-        use_ensemble: bool = False,
-        paper_trade_enabled: bool = True,
-        paper_trade_risk_pct: float = 1.0,
-        initial_cash: float = 100000.0,
-        price_interval: str = "1d",
-    ):
-        """
-        Initialize daemon config.
+    Attributes
+    ----------
+    universe : List[str]
+        List of symbols to process.
+    ingest_days_back : int
+        How many days back to ingest data for incremental daily ingest.
+    anomaly_lookback_days : int
+        How many days back anomaly detection should consider.
+    price_interval : str
+        Price interval for intraday ingest (e.g. "15m", "1h", "1d").
+    ingest_news : bool
+        Whether to ingest news.
+    ingest_macro : bool
+        Whether to ingest macro indicators.
+    use_ensemble : bool
+        Whether Patron should use ensemble mode.
+    paper_trade_enabled : bool
+        Whether paper trades should be executed.
+    paper_trade_risk_pct : float
+        Percent of equity risked per trade.
+    """
 
-        Args:
-            ingest_days_back: Days to look back for incremental ingest (if no data)
-            anomaly_lookback_days: Days to look back for anomaly detection
-            anomaly_k: Z-score threshold for anomaly detection
-            anomaly_q: Volume quantile threshold for anomaly detection
-            anomaly_window: Rolling window size for anomaly detection
-            use_ensemble: Use ensemble mode for Patron
-            paper_trade_enabled: Enable paper trading
-            paper_trade_risk_pct: Risk percentage per trade
-            initial_cash: Initial cash for paper trader
-            price_interval: Price bar interval ("1d" or "15m")
-        """
-        self.ingest_days_back = ingest_days_back
-        self.anomaly_lookback_days = anomaly_lookback_days
-        self.anomaly_k = anomaly_k
-        self.anomaly_q = anomaly_q
-        self.anomaly_window = anomaly_window
-        self.use_ensemble = use_ensemble
-        self.paper_trade_enabled = paper_trade_enabled
-        self.paper_trade_risk_pct = paper_trade_risk_pct
-        self.initial_cash = initial_cash
-        self.price_interval = price_interval
+    universe: List[str]
+    ingest_days_back: int = 7
+    anomaly_lookback_days: int = 30
+    price_interval: str = "15m"
+    ingest_news: bool = True
+    ingest_macro: bool = True
+    use_ensemble: bool = True
+    paper_trade_enabled: bool = True
+    paper_trade_risk_pct: float = 1.0
 
 
 def run_daemon_cycle(
     session: Session,
-    config: Optional[DaemonConfig] = None,
-    paper_trader: Optional[PaperTrader] = None,
+    config: DaemonConfig,
+    paper_trader,
 ) -> DaemonRun:
     """
-    Run a single daemon cycle.
+    Run a full daemon cycle and persist a DaemonRun row.
 
-    Pipeline:
-    1. Incremental data ingest
-    2. Anomaly detection (on recent data)
-    3. Patron decision generation
-    4. Paper trade execution (optional)
-
-    Args:
-        session: Database session
-        config: Daemon configuration
-        paper_trader: Paper trader instance (will create if None and enabled)
-
-    Returns:
-        DaemonRun record
+    Returns
+    -------
+    DaemonRun
+        The persisted run object.
     """
-    if config is None:
-        config = DaemonConfig()
+    start_time = datetime.now(timezone.utc)
 
-    start_time = time.time()
-    timestamp = utc_now()
-
-    logger.info("=" * 60)
-    logger.info(f"Starting daemon cycle at {timestamp}")
-    logger.info("=" * 60)
-
-    # Initialize run record
     run = DaemonRun(
-        timestamp=timestamp,
+        timestamp=start_time,
         status="RUNNING",
+        bars_ingested=0,
+        anomalies_detected=0,
+        decisions_made=0,
+        trades_executed=0,
     )
     session.add(run)
     session.commit()
 
     try:
-        # Step 1: Incremental data ingest
-        logger.info("\n[1/4] Incremental data ingest...")
-        seeded = ensure_p0_symbols(session)
-        if seeded:
-            logger.info("  Seeded %s missing symbols before ingest", seeded)
+        log.info("=" * 60)
+        log.info("Starting daemon cycle at %s", start_time)
+        log.info("=" * 60)
 
-        assets = get_tracked_assets(session)
+        # ------------------------------------------------------------------
+        # 1) Incremental data ingest
+        # ------------------------------------------------------------------
+        log.info("[1/4] Incremental data ingest...")
 
-        if config.price_interval.lower() == "1d":
-            ingest_results = ingest_incremental(
-                session, days_back=config.ingest_days_back, assets=assets
-            )
-            bars_ingested = sum(ingest_results.values())
-        else:
-            bars_ingested = ingest_intraday_bars_all(
+        assets = config.universe
+
+        # Her durumda günlük barları ingest et ki anomaly engine çalışabilsin.
+        ingest_results = ingest_incremental(
+            session, days_back=config.ingest_days_back, assets=assets
+        )
+        daily_bars_ingested = sum(ingest_results.values())
+
+        # Interval 1d'den farklıysa ek olarak intraday barları da çek.
+        intraday_bars_ingested = 0
+        if config.price_interval.lower() != "1d":
+            intraday_bars_ingested = ingest_intraday_bars_all(
                 session,
                 interval=config.price_interval,
                 lookback_days=config.ingest_days_back,
             )
+
+        bars_ingested = daily_bars_ingested + intraday_bars_ingested
         run.bars_ingested = bars_ingested
 
-        logger.info(f"  ✓ Ingested {bars_ingested} bars across {len(assets)} assets")
+        log.info("  ✓ Ingested %d bars across %d assets", bars_ingested, len(assets))
 
-        # News ingest for non-crypto assets
-        logger.info("  Ingesting news data...")
-        total_news = 0
-        news_window_end = utc_now()
-        news_window_start = news_window_end - timedelta(days=config.ingest_days_back)
-        for asset in assets:
-            if asset.asset_class == AssetClass.CRYPTO:
-                continue
-            try:
-                news_count = ingest_news_data(
-                    session,
-                    symbol=asset.symbol,
-                    start_date=news_window_start,
-                    end_date=news_window_end,
-                    limit=5,
-                )
-                total_news += news_count
-            except Exception as e:
-                logger.error(f"News ingest failed for {asset.symbol}: {e}")
-        logger.info(f"  \u2713 Ingested {total_news} news articles")
+        # Haber ingest
+        if config.ingest_news:
+            log.info("  Ingesting news data...")
+            news_count = ingest_news_for_universe(session, assets, limit=5)
+            log.info("  ✓ Ingested %d news articles", news_count)
 
-        # Step 2: Anomaly detection (on recent data only)
-        logger.info("\n[2/4] Anomaly detection...")
+        # Makro ingest
+        if config.ingest_macro:
+            log.info("  Ingesting macro indicators...")
+            macro_count = ingest_macro_for_universe(session)
+            log.info("  ✓ Ingested %d macro indicator rows", macro_count)
 
-        # Get date range for recent data
-        end_date = date.today()
-        start_date = end_date - timedelta(days=config.anomaly_lookback_days)
-
-        # Delete old anomalies in this range to avoid duplicates
-        for asset in assets:
-            symbol_obj = session.query(Symbol).filter_by(symbol=asset.symbol).first()
-            if symbol_obj:
-                session.query(AnomalyORM).filter(
-                    AnomalyORM.symbol_id == symbol_obj.id,
-                    AnomalyORM.date >= start_date,
-                    AnomalyORM.date <= end_date,
-                ).delete()
         session.commit()
 
-        anomaly_results = detect_anomalies_all_assets(
-            session=session,
-            assets=assets,
-            k=config.anomaly_k,
-            q=config.anomaly_q,
-            window=config.anomaly_window,
-        )
-
-        anomalies_detected = sum(len(a) for a in anomaly_results.values())
-        run.anomalies_detected = anomalies_detected
-
-        logger.info(f"  ✓ Detected {anomalies_detected} anomalies")
-
-        # Step 3: Patron decision generation
-        logger.info("\n[3/4] Patron decision generation...")
-
-        decision_results = run_daily_decision_pass(
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
             session,
-            days_back=config.anomaly_lookback_days,
+            assets,
+            lookback_days=config.anomaly_lookback_days,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
             use_ensemble=config.use_ensemble,
         )
-
-        # Flatten decisions
-        all_decisions = []
-        for decisions in decision_results.values():
-            all_decisions.extend(decisions)
-
-        decisions_made = len(all_decisions)
-        run.decisions_made = decisions_made
-
-        logger.info(f"  ✓ Generated {decisions_made} decisions")
-
-        # Step 4: Paper trade execution
-        trades_executed = 0
-        if config.paper_trade_enabled and all_decisions:
-            logger.info("\n[4/4] Paper trade execution...")
-
-            # Initialize paper trader if not provided
-            if paper_trader is None:
-                paper_trader = PaperTrader(session, initial_cash=config.initial_cash)
-
-            # Update portfolio prices before trading
-            paper_trader.update_portfolio_prices()
-
-            # Execute decisions
-            for decision in all_decisions:
-                trade = paper_trader.execute_decision(
-                    decision, risk_pct=config.paper_trade_risk_pct
-                )
-                if trade:
-                    trades_executed += 1
-
-            run.trades_executed = trades_executed
-
-            # Create portfolio snapshot
-            snapshot = paper_trader.create_portfolio_snapshot()
-
-            # Update daemon run with portfolio metrics
-            run.portfolio_value = snapshot.equity
-            run.cash = snapshot.cash
-
-            logger.info(f"  ✓ Executed {trades_executed} trades")
-            logger.info(f"  Portfolio value: ${snapshot.equity:,.2f}")
-            logger.info(f"  Cash: ${snapshot.cash:,.2f}")
-            logger.info(f"  Positions: {snapshot.num_positions}")
-            if snapshot.max_drawdown is not None:
-                logger.info(f"  Max drawdown: {snapshot.max_drawdown:.2%}")
-
-        else:
-            logger.info("\n[4/4] Paper trade execution... SKIPPED")
-
-        # Success
-        duration = time.time() - start_time
-        run.status = "SUCCESS"
-        run.duration_seconds = duration
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
         session.commit()
 
-        logger.info("\n" + "=" * 60)
-        logger.info(f"Daemon cycle completed in {duration:.2f}s")
-        logger.info(f"  Bars ingested:      {bars_ingested}")
-        logger.info(f"  Anomalies detected: {anomalies_detected}")
-        logger.info(f"  Decisions made:     {decisions_made}")
-        logger.info(f"  Trades executed:    {trades_executed}")
-        logger.info("=" * 60)
+        # ------------------------------------------------------------------
+        # 4) Paper trade execution
+        # ------------------------------------------------------------------
+        if config.paper_trade_enabled:
+            log.info("[4/4] Paper trade execution...")
+            trades = paper_trader.execute_decisions(
+                decisions, risk_pct=config.paper_trade_risk_pct
+            )
+            run.trades_executed = len(trades)
+            log.info("  ✓ Executed %d paper trades", len(trades))
+        else:
+            log.info("[4/4] Paper trade execution... SKIPPED")
+
+        # ------------------------------------------------------------------
+        # Finalize
+        # ------------------------------------------------------------------
+        end_time = datetime.now(timezone.utc)
+        run.duration_seconds = (end_time - start_time).total_seconds()
+        run.status = "SUCCESS"
+        session.commit()
+
+        log.info("=" * 60)
+        log.info(
+            "Daemon cycle completed in %.2fs", run.duration_seconds or 0.0
+        )
+        log.info(
+            "  Bars ingested:      %d\n"
+            "  Anomalies detected: %d\n"
+            "  Decisions made:     %d\n"
+            "  Trades executed:    %d",
+            run.bars_ingested or 0,
+            run.anomalies_detected or 0,
+            run.decisions_made or 0,
+            run.trades_executed or 0,
+        )
+        log.info("=" * 60)
 
         return run
 
-    except Exception as e:
-        # Log error
-        duration = time.time() - start_time
+    except Exception as exc:
+        log.exception("Daemon cycle failed: %s", exc)
         run.status = "FAILED"
-        run.error_message = str(e)
-        run.duration_seconds = duration
+        run.error_message = str(exc)
         session.commit()
-
-        logger.error(f"\n✗ Daemon cycle failed: {e}", exc_info=True)
         raise
-
-
-def get_or_create_paper_trader(session: Session, initial_cash: float = 100000.0) -> PaperTrader:
-    """
-    Get or create a paper trader instance.
-
-    Loads existing portfolio state from last paper trade if available.
-
-    Args:
-        session: Database session
-        initial_cash: Initial cash if creating new trader
-
-    Returns:
-        PaperTrader instance
-    """
-    from ..data.schema import PaperTrade
-
-    # Get last paper trade to restore portfolio state
-    last_trade = (
-        session.query(PaperTrade).order_by(PaperTrade.timestamp.desc()).first()
-    )
-
-    if last_trade:
-        # Restore from last state
-        trader = PaperTrader(session, initial_cash=last_trade.cash)
-
-        # Reconstruct positions from trade history
-        # (This is a simplified approach - in production you'd want a separate
-        # positions table or more sophisticated state management)
-        logger.info(f"Restored paper trader from last trade (cash: ${last_trade.cash:,.2f})")
-
-    else:
-        # Create new trader
-        trader = PaperTrader(session, initial_cash=initial_cash)
-        logger.info(f"Created new paper trader with ${initial_cash:,.2f}")
-
-    return trader
