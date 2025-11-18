@@ -3,6 +3,7 @@ Database connection and session management.
 """
 import logging
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Generator, Optional
 
 from sqlalchemy import create_engine, Engine
@@ -20,9 +21,13 @@ _SessionLocal: Optional[sessionmaker] = None
 
 def _create_engine(path: str) -> Engine:
     """Create a new SQLAlchemy engine for the given SQLite path."""
-    logger.info(f"Creating database engine for: {path}")
+    db_path = Path(path)
+    if db_path.parent and not db_path.parent.exists():
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Creating database engine for: {db_path}")
     return create_engine(
-        f"sqlite:///{path}",
+        f"sqlite:///{db_path}",
         echo=False,
         connect_args={"check_same_thread": False},
     )
