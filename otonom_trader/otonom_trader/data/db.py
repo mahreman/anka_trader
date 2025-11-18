@@ -45,7 +45,11 @@ def get_engine(db_path: Optional[str] = None) -> Engine:
     """
     global _engine, _engine_path, _SessionLocal
 
-    requested_path = db_path or DB_PATH
+    # If no explicit path is provided, prefer the current engine path (if one was
+    # already established) so that callers like `get_session()` continue using
+    # whichever database the orchestrator configured earlier. This prevents the
+    # helper from "snapping back" to the package default path mid-run.
+    requested_path = db_path or _engine_path or DB_PATH
 
     if _engine is None:
         _engine = _create_engine(requested_path)
