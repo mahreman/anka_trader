@@ -3,7 +3,7 @@ Database connection and session management.
 """
 import logging
 from contextlib import contextmanager
-from typing import Generator
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, Engine
 from sqlalchemy.orm import sessionmaker, Session
@@ -13,11 +13,22 @@ from ..config import DB_PATH
 logger = logging.getLogger(__name__)
 
 # Global engine and session factory
-_engine: Engine = None
-_SessionLocal: sessionmaker = None
+_engine: Optional[Engine] = None
+_engine_path: Optional[str] = None
+_SessionLocal: Optional[sessionmaker] = None
 
 
-def get_engine(db_path: str = None) -> Engine:
+def _create_engine(path: str) -> Engine:
+    """Create a new SQLAlchemy engine for the given SQLite path."""
+    logger.info(f"Creating database engine for: {path}")
+    return create_engine(
+        f"sqlite:///{path}",
+        echo=False,
+        connect_args={"check_same_thread": False},
+    )
+
+
+def get_engine(db_path: Optional[str] = None) -> Engine:
     """
     Get or create SQLAlchemy engine.
 
@@ -27,21 +38,26 @@ def get_engine(db_path: str = None) -> Engine:
     Returns:
         SQLAlchemy Engine instance
     """
-    global _engine
+    global _engine, _engine_path, _SessionLocal
+
+    requested_path = db_path or DB_PATH
 
     if _engine is None:
-        path = db_path or DB_PATH
-        logger.info(f"Creating database engine for: {path}")
-        _engine = create_engine(
-            f"sqlite:///{path}",
-            echo=False,  # Set to True for SQL query logging
-            connect_args={"check_same_thread": False},  # Needed for SQLite
-        )
+        _engine = _create_engine(requested_path)
+        _engine_path = requested_path
+        return _engine
+
+    if requested_path != _engine_path:
+        logger.info("Switching database engine to: %s", requested_path)
+        _engine.dispose()
+        _engine = _create_engine(requested_path)
+        _engine_path = requested_path
+        _SessionLocal = None  # reset session factory so future sessions use new engine
 
     return _engine
 
 
-def get_session_factory(engine: Engine = None) -> sessionmaker:
+def get_session_factory(engine: Optional[Engine] = None) -> sessionmaker:
     """
     Get or create session factory.
 
@@ -56,7 +72,6 @@ def get_session_factory(engine: Engine = None) -> sessionmaker:
     if _SessionLocal is None:
         eng = engine or get_engine()
         _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=eng)
-
     return _SessionLocal
 
 

@@ -21,11 +21,11 @@ import time
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 import yaml
 
-from .data import get_session
+from .data import get_session, get_engine, init_db
 from .daemon.daemon import DaemonConfig, run_daemon_cycle, get_or_create_paper_trader
 from .daemon.trading_daemon import TradingDaemon, ExecutionMode
 from .alerts.engine import AlertEngine
@@ -156,6 +156,7 @@ def run_orchestrator_loop() -> None:
     ensure_default_config_exists()
 
     alerts = AlertEngine(alerts_config_path="config/alerts.yaml")
+    initialized_db_paths: Set[str] = set()
     cycle = 0
 
     logger.info("Starting orchestrator loop...")
@@ -187,6 +188,11 @@ def run_orchestrator_loop() -> None:
         )
 
         try:
+            engine = get_engine(cfg.db_path)
+            if cfg.db_path not in initialized_db_paths:
+                init_db(engine)
+                initialized_db_paths.add(cfg.db_path)
+
             # 1) Ingestion + anomaly + ensemble + (optional) paper trader
             with get_session() as session:
                 # mode determines paper trade availability
