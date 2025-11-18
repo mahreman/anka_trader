@@ -1,0 +1,182 @@
+---
+# Ablation Study - Analyst Contribution
+# ========================================
+# Systematically remove each analyst to measure their marginal contribution.
+# using the NEW simplified StrategyConfig format.
+#
+# Goal: "Hangi analist gerçekten katkı veriyor?"
+#
+# Method:
+# 1. Test all 2^4 = 16 combinations of (tech, news, macro, rl) ON/OFF
+# 2. Measure performance degradation when removing each analyst
+# 3. Identify which analysts are essential vs redundant
+#
+# Key questions:
+# - Can any single analyst beat the ensemble?
+# - Which 2-analyst combination is best?
+# - Does adding analyst X to Y improve performance?
+# - Are all analysts contributing, or are some redundant?
+
+name: "baseline_v1_analyst_ablation"
+description: "Analist kapatma deneyi (tech/news/macro/rl)"
+experiment_type: "ablation"
+
+# Base strategy to use
+base_strategy: "strategies/baseline_v1.0.yaml"
+
+# Use grid search to test all combinations
+search_method: "grid"
+
+# Train/test split
+split:
+  train_start: "2018-01-01"
+  train_end: "2021-12-31"
+  test_start: "2022-01-01"
+  test_end: "2024-12-31"
+
+# Universe override (empty = use strategy default)
+universe_override: []
+
+# =================================
+# Ablation Grid (NEW FORMAT)
+# =================================
+# Set weight to 0.0 to disable an analyst
+# Set weight to 1.0 to enable an analyst
+#
+# This will test 2^4 = 16 combinations:
+# 1. All ON:           tech=1.0, news=1.0, macro=1.0, rl=1.0  (baseline)
+# 2. Tech only:        tech=1.0, news=0.0, macro=0.0, rl=0.0
+# 3. Tech + News:      tech=1.0, news=1.0, macro=0.0, rl=0.0
+# 4. Tech + Macro:     tech=1.0, news=0.0, macro=1.0, rl=0.0
+# 5. Tech + RL:        tech=1.0, news=0.0, macro=0.0, rl=1.0
+# 6. News + Macro:     tech=0.0, news=1.0, macro=1.0, rl=0.0
+# 7. News + RL:        tech=0.0, news=1.0, macro=0.0, rl=1.0
+# 8. Macro + RL:       tech=0.0, news=0.0, macro=1.0, rl=1.0
+# 9. Tech + News + Macro:   tech=1.0, news=1.0, macro=1.0, rl=0.0
+# 10. Tech + News + RL:      tech=1.0, news=1.0, macro=0.0, rl=1.0
+# 11. Tech + Macro + RL:     tech=1.0, news=0.0, macro=1.0, rl=1.0
+# 12. News + Macro + RL:     tech=0.0, news=1.0, macro=1.0, rl=1.0
+# 13. News only:       tech=0.0, news=1.0, macro=0.0, rl=0.0
+# 14. Macro only:      tech=0.0, news=0.0, macro=1.0, rl=0.0
+# 15. RL only:         tech=0.0, news=0.0, macro=0.0, rl=1.0
+# 16. All OFF:         tech=0.0, news=0.0, macro=0.0, rl=0.0 (should fail validation)
+
+parameters:
+  # Technical analyst (anomaly detection)
+  ensemble.analyst_weights.tech:
+    values: [0.0, 1.0]
+    description: "Technical analyst - 0.0=OFF, 1.0=ON"
+
+  # News/Macro/LLM analyst
+  ensemble.analyst_weights.news:
+    values: [0.0, 1.0]
+    description: "News/Macro analyst - 0.0=OFF, 1.0=ON"
+
+  # Regime/Risk analyst (previously called macro in user's request)
+  ensemble.analyst_weights.macro:
+    values: [0.0, 1.0]
+    description: "Regime/Risk analyst - 0.0=OFF, 1.0=ON"
+
+  # RL agent (reinforcement learning)
+  ensemble.analyst_weights.rl:
+    values: [0.0, 1.0]
+    description: "RL agent - 0.0=OFF, 1.0=ON"
+
+# Total combinations: 2 * 2 * 2 * 2 = 16 runs (fast!)
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  primary_metric: "test_sharpe"
+  direction: "maximize"
+
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+    - "test_total_trades"
+    - "test_profit_factor"
+
+  overfitting_check:
+    enabled: true
+    train_test_ratio_threshold: 1.5
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  # Relaxed constraints - want to see even bad configs
+  test_sharpe_min: 0.0           # No minimum (want to see worst case)
+  test_max_dd_max: -100.0        # No constraint
+  test_min_trades: 1             # At least 1 trade required
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1
+  save_equity_curves: true       # Save for comparison
+  save_trade_lists: true
+  verbose: true
+
+# =================================
+# Analysis Guide
+# =================================
+# After running this ablation study, analyze:
+#
+# 1. Performance degradation when removing each analyst:
+#    Compare: All ON vs (All ON - tech) vs (All ON - news) vs (All ON - macro)
+#
+#    Example:
+#    - Baseline (all ON):  Sharpe = 1.5
+#    - Remove tech:        Sharpe = 1.2  →  tech contributes +0.3
+#    - Remove news:        Sharpe = 1.4  →  news contributes +0.1
+#    - Remove macro:       Sharpe = 1.3  →  macro contributes +0.2
+#
+# 2. Best single analyst:
+#    - Tech only vs News only vs Macro only
+#    - Can any single analyst beat the ensemble?
+#
+# 3. Best 2-analyst combination:
+#    - Tech + News vs Tech + Macro vs News + Macro
+#    - Which pair is most synergistic?
+#
+# 4. Marginal contribution:
+#    - Adding analyst X to analyst Y: What's the lift?
+#    - Example: Tech only (Sharpe=1.0) → Tech+News (Sharpe=1.3) → News adds +0.3
+#
+# 5. Redundancy check:
+#    - If removing X barely changes performance → X is redundant
+#    - If removing X causes huge drop → X is critical
+#
+# 6. RL agent evaluation:
+#    - Does adding RL improve baseline?
+#    - RL only vs other analysts
+#
+# Expected insights:
+# ✓ Critical analysts: Removing them causes Sharpe to drop significantly
+# ✓ Redundant analysts: Removing them has minimal impact
+# ✓ Synergy: Some analyst pairs work better together
+# ✓ Optimal subset: Maybe 2-3 analysts are enough, 4th adds little value
+#
+# Visualization idea:
+# Create a bar chart showing test Sharpe for each configuration:
+#
+#   All ON         ████████████████  1.5
+#   Tech+News+Macro ███████████████  1.4
+#   Tech+News      ████████████      1.2
+#   Tech+Macro     ████████████      1.2
+#   News+Macro     ███████████       1.1
+#   Tech only      ██████████        1.0
+#   News only      ████████          0.8
+#   Macro only     ██████            0.6
+#
+# CLI command:
+#   python -m otonom_trader.cli experiments grid-search \
+#     --experiment-name baseline_v1_ablation \
+#     --strategy-path strategies/baseline_v1.0.yaml \
+#     --grid-path experiments/ablation_analysts.yaml \
+#     --train-start 2018-01-01 --train-end 2021-12-31 \
+#     --test-start 2022-01-01 --test-end 2024-12-31 \
+#     --description "Analist ablation deneyi"

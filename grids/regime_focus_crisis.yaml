@@ -1,0 +1,183 @@
+---
+# Regime-Specific Experiment: Crisis Performance
+# ===============================================
+# Test strategy performance in specific market regimes/scenarios.
+#
+# Goal: "Where does the strategy work? Where does it fail?"
+#
+# Method:
+# - Run backtests on specific market periods (crisis, bull, bear, sideways)
+# - Compare performance across regimes
+# - Identify which regimes are profitable vs unprofitable
+#
+# This helps answer:
+# - Should I turn off the strategy during X regime?
+# - Which regime is my "edge"?
+# - Am I diversified across regimes or dependent on one?
+
+name: "regime_focus_crisis_v1"
+description: "Regime-specific performance analysis across market conditions"
+experiment_type: "regime_specific"
+
+# Use grid search (we'll test different configs in each regime)
+search_method: "grid"
+
+# =================================
+# Regime Periods
+# =================================
+# Instead of single train/test split, we'll test on specific scenarios
+# This YAML defines the default (override in code for specific regimes)
+
+# Default split (will be overridden by regime-specific runner)
+split:
+  train_start: "2018-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2025-01-17"
+
+# Symbols
+symbols: []
+
+# =================================
+# Scenarios to Test
+# =================================
+# These are the specific periods to evaluate.
+# The regime-specific runner will run the strategy on each period.
+
+scenarios:
+  # Crisis / High Volatility Periods
+  covid_crash:
+    name: "Covid Crash 2020"
+    start_date: "2020-02-01"
+    end_date: "2020-05-01"
+    regime_type: "crisis"
+    description: "Feb-Apr 2020 market crash (high vol, panic selling)"
+
+  crypto_crash_2022:
+    name: "Crypto Bear 2022"
+    start_date: "2022-01-01"
+    end_date: "2022-12-31"
+    regime_type: "bear"
+    description: "2022 crypto bear market (prolonged downtrend)"
+
+  high_inflation:
+    name: "High Inflation Period"
+    start_date: "2021-01-01"
+    end_date: "2023-12-31"
+    regime_type: "high_inflation"
+    description: "2021-2023 high inflation, rising rates"
+
+  # Bull Market Periods
+  bull_2021:
+    name: "Bull Run 2021"
+    start_date: "2020-10-01"
+    end_date: "2021-11-30"
+    regime_type: "bull"
+    description: "Q4 2020 - Q4 2021 bull market"
+
+  bull_2017:
+    name: "Bull Run 2017"
+    start_date: "2017-01-01"
+    end_date: "2017-12-31"
+    regime_type: "bull"
+    description: "Bitcoin 2017 bull run"
+
+  # Sideways / Low Volatility Periods
+  sideways_2019:
+    name: "Sideways 2019"
+    start_date: "2019-01-01"
+    end_date: "2019-12-31"
+    regime_type: "sideways"
+    description: "2019 sideways market (range-bound)"
+
+  sideways_2023:
+    name: "Sideways 2023"
+    start_date: "2023-01-01"
+    end_date: "2023-06-30"
+    regime_type: "sideways"
+    description: "H1 2023 consolidation period"
+
+# =================================
+# Parameter Variations (optional)
+# =================================
+# Test a few key configurations in each regime
+# to see if optimal params change by regime
+
+parameters:
+  # Test conservative vs aggressive risk
+  risk_management.position_sizing.risk_per_trade_pct:
+    values: [0.5, 1.0, 2.0]
+    description: "Conservative vs aggressive position sizing"
+
+  # Test tight vs wide stops
+  risk_management.stop_loss.percentage:
+    values: [3.0, 5.0, 8.0]
+    description: "Tight vs wide stop-loss"
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  primary_metric: "test_sharpe"
+  direction: "maximize"
+
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+    - "test_total_trades"
+
+  overfitting_check:
+    enabled: false  # Not relevant for scenario testing
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  test_sharpe_min: -5.0          # Allow negative (want to see losses)
+  test_max_dd_max: -100.0        # No constraint
+  test_min_trades: 1
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1
+  save_equity_curves: true       # Important for regime comparison
+  save_trade_lists: true
+  verbose: true
+
+# =================================
+# Analysis Guide
+# =================================
+# After running regime-specific experiments, create a comparison table:
+#
+# | Regime          | Period      | Sharpe | CAGR  | MaxDD  | Trades | Notes        |
+# |-----------------|-------------|--------|-------|--------|--------|--------------|
+# | Covid Crash     | Feb-Apr'20  | -0.5   | -15%  | -25%   | 12     | Failed badly |
+# | Crypto Bear'22  | 2022        | 0.8    | 5%    | -18%   | 45     | OK           |
+# | Bull Run 2021   | Oct'20-Nov'21| 2.1   | 45%   | -12%   | 67     | Excellent    |
+# | Sideways 2019   | 2019        | 1.2    | 12%   | -8%    | 34     | Good         |
+#
+# Key insights to extract:
+#
+# 1. Regime breakdown:
+#    - Which regimes are profitable? (Sharpe > 1.0)
+#    - Which regimes lose money? (Sharpe < 0)
+#
+# 2. Regime dependency:
+#    - If only profitable in bull markets → not robust
+#    - If profitable across regimes → robust strategy
+#
+# 3. Crisis performance:
+#    - Does it blow up in crashes? (max DD > -30%)
+#    - Does it protect capital? (max DD < -15%)
+#
+# 4. Optimal regime allocation:
+#    - Should I run strategy 24/7 or only in certain regimes?
+#    - Example: Turn off during crisis regimes if Sharpe < 0
+#
+# 5. Parameter sensitivity by regime:
+#    - Do optimal params change by regime?
+#    - Crisis: Need tighter stops?
+#    - Bull: Can use wider stops?

@@ -1,0 +1,122 @@
+---
+# Ablation Study: Analyst Contribution
+# ======================================
+# Systematically remove each analyst to measure their contribution.
+#
+# Goal: "Which analyst actually adds value?"
+#
+# Method:
+# 1. Baseline: All analysts enabled (tech + news + risk)
+# 2. Tech only: Disable news and risk analysts
+# 3. Tech + News: Disable risk analyst
+# 4. Tech + Risk: Disable news analyst
+# 5. News + Risk: Disable tech analyst
+#
+# Compare performance to see which components are essential.
+
+name: "ablation_analysts_v1"
+description: "Ablation study to measure individual analyst contribution"
+experiment_type: "ablation"
+
+# Use grid search to test all ablation configurations
+search_method: "grid"
+
+# Train/test split
+split:
+  train_start: "2018-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2025-01-17"
+
+# Symbols to test
+symbols: []  # Use strategy default
+
+# =================================
+# Ablation Grid
+# =================================
+# Set weight to 0.0 to disable an analyst
+# Set weight to 1.0 to enable an analyst
+#
+# Configurations tested:
+# 1. All ON:        tech=1.0, news=1.0, risk=1.0  (baseline)
+# 2. Tech only:     tech=1.0, news=0.0, risk=0.0
+# 3. Tech+News:     tech=1.0, news=1.0, risk=0.0
+# 4. Tech+Risk:     tech=1.0, news=0.0, risk=1.0
+# 5. News+Risk:     tech=0.0, news=1.0, risk=1.0
+# 6. News only:     tech=0.0, news=1.0, risk=0.0
+# 7. Risk only:     tech=0.0, news=0.0, risk=1.0
+
+parameters:
+  # Technical analyst (anomaly detection)
+  analist_1.weight:
+    values: [0.0, 1.0]
+    description: "Technical analyst - 0=OFF, 1.0=ON"
+
+  # News/Macro/LLM analyst
+  analist_2.weight:
+    values: [0.0, 1.0]
+    description: "News/Macro analyst - 0=OFF, 1.0=ON"
+
+  # Regime/DSI risk analyst
+  analist_3.weight:
+    values: [0.0, 1.0]
+    description: "Risk analyst - 0=OFF, 1.0=ON"
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  primary_metric: "test_sharpe"
+  direction: "maximize"
+
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+    - "test_total_trades"
+
+  overfitting_check:
+    enabled: true
+    train_test_ratio_threshold: 1.5
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  test_sharpe_min: 0.0           # No minimum (want to see even bad configs)
+  test_max_dd_max: -100.0        # No constraint (want to see worst case)
+  test_min_trades: 1             # At least 1 trade
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1
+  save_equity_curves: true       # Save equity curves for comparison
+  save_trade_lists: true
+  verbose: true
+
+# =================================
+# Analysis Guide
+# =================================
+# After running this ablation study, compare:
+#
+# 1. Performance degradation when removing each analyst:
+#    - Remove tech: How much does Sharpe drop?
+#    - Remove news: How much does Sharpe drop?
+#    - Remove risk: How much does Sharpe drop?
+#
+# 2. Best 2-analyst combination:
+#    - Tech + News vs Tech + Risk vs News + Risk
+#
+# 3. Single analyst performance:
+#    - Can any single analyst beat the ensemble?
+#
+# 4. Marginal contribution:
+#    - Adding analyst X to analyst Y: What's the lift?
+#
+# Expected insights:
+# - If removing X causes huge drop → X is critical
+# - If removing X barely changes anything → X is redundant
+# - If single analyst beats ensemble → ensemble logic is broken
+# - Ideal: Each analyst adds marginal value to the ensemble

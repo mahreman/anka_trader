@@ -1,0 +1,75 @@
+---
+# Baseline v1.0 Strategy - Simplified Configuration
+# ==================================================
+# This uses the standardized StrategyConfig contract.
+
+# ---------------------------------------------------------------------------
+# METADATA (Required)
+# ---------------------------------------------------------------------------
+name: "baseline"
+description: "Multi-analyst ensemble strategy with risk management"
+version: "1.0"
+
+# ---------------------------------------------------------------------------
+# UNIVERSE: Which symbols to trade (Required)
+# ---------------------------------------------------------------------------
+universe:
+  symbols:
+    - "BTC-USD"
+    - "ETH-USD"
+    - "GC=F"    # Gold futures
+    - "^GSPC"   # S&P 500
+  universe_tags: ["crypto", "traditional"]
+
+# ---------------------------------------------------------------------------
+# RISK: Risk management (Defaults: risk_pct=1.0, stop_loss=5.0, take_profit=10.0)
+# ---------------------------------------------------------------------------
+risk:
+  risk_pct: 1.0              # 1% of equity per trade
+  stop_loss_pct: 5.0         # 5% stop-loss
+  take_profit_pct: 10.0      # 10% take-profit
+  max_drawdown_pct: 40.0     # Max acceptable DD (alarm level)
+
+# ---------------------------------------------------------------------------
+# FILTERS: Signal filtering (All optional)
+# ---------------------------------------------------------------------------
+filters:
+  dsi_threshold: 0.5         # DSI threshold (0-1)
+  min_regime_vol: null       # Min volatility
+  max_regime_vol: null       # Max volatility
+  min_volume: null           # Min volume filter
+  min_price: null            # Min price filter
+
+# ---------------------------------------------------------------------------
+# ENSEMBLE: Analyst weights (Defaults: all 1.0)
+# ---------------------------------------------------------------------------
+ensemble:
+  analyst_weights:
+    tech: 1.0                # Technical analyst
+    news: 1.2                # News/Macro/LLM analyst (higher weight)
+    risk: 0.8                # Regime/Risk analyst (conservative)
+    rl: 0.0                  # RL agent (disabled)
+
+  disagreement_threshold: 0.5  # Penalty when analysts disagree
+
+# ---------------------------------------------------------------------------
+# EXECUTION: Execution parameters
+# ---------------------------------------------------------------------------
+execution:
+  bar_type: "D1"             # Daily bars
+  slippage_bps: 10.0         # 10 bps = 0.1% slippage
+  max_trades_per_day: 10     # Max 10 trades per day
+  initial_capital: 100000.0  # $100k starting capital
+
+# ---------------------------------------------------------------------------
+# BACKTEST SETTINGS (Optional - used by research engine)
+# ---------------------------------------------------------------------------
+backtest:
+  date_ranges:
+    crypto:
+      start: "2017-01-01"
+      end: "2025-01-17"
+
+    traditional:
+      start: "2008-01-01"
+      end: "2025-01-17"

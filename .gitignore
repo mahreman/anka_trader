@@ -73,3 +73,10 @@ Thumbs.db
 data/
 logs/
 .streamlit/
+
+# Broker and alert configurations (contain sensitive credentials)
+config/broker.yaml
+config/alerts.yaml
+
+# Keep only the example files
+!config/*.example

@@ -1,0 +1,142 @@
+---
+# Parameter Sweep Experiment Template
+# =====================================
+# Systematic parameter sweep to find optimal configuration.
+#
+# Goal: "Is there a better tuning of the same strategy?"
+#
+# This template explores key parameters that typically impact performance:
+# - Risk per trade (position sizing)
+# - Stop-loss and take-profit levels
+# - Anomaly detection threshold (DSI)
+# - Ensemble analyst weights
+
+name: "param_sweep_baseline_v1"
+description: "Systematic parameter sweep for baseline_v1 strategy - finding optimal tuning"
+experiment_type: "param_sweep"
+
+# Search method: "grid" (exhaustive) or "random" (sample N combinations)
+search_method: "grid"
+random_samples: 100  # Only used if search_method == "random"
+
+# Train/test split
+split:
+  train_start: "2018-01-01"
+  train_end: "2022-12-31"
+  test_start: "2023-01-01"
+  test_end: "2025-01-17"
+
+# Symbols to test (empty = use strategy default)
+symbols: []  # ["BTC-USD", "ETH-USD"] or [] for all from strategy config
+
+# =================================
+# Parameter Grid
+# =================================
+parameters:
+  # ---- Risk Management ----
+  # Position sizing: How much to risk per trade
+  risk_management.position_sizing.risk_per_trade_pct:
+    values: [0.5, 1.0, 1.5, 2.0]
+    description: "Risk per trade as % of portfolio (0.5% = conservative, 2% = aggressive)"
+
+  # Stop-loss: Where to cut losses
+  risk_management.stop_loss.percentage:
+    values: [2.0, 3.0, 5.0, 8.0]
+    description: "Stop-loss % below entry (tighter = more stops, wider = bigger losses)"
+
+  # Take-profit: Where to take profits
+  risk_management.take_profit.percentage:
+    values: [6.0, 10.0, 15.0, 20.0]
+    description: "Take-profit % above entry (lower = quick profits, higher = let winners run)"
+
+  # ---- Analyst Weights ----
+  # Technical analyst (anomaly detection)
+  analist_1.weight:
+    values: [0.6, 0.8, 1.0, 1.2]
+    description: "Technical analyst weight (anomaly-based signals)"
+
+  # News/Macro/LLM analyst
+  analist_2.weight:
+    values: [0.8, 1.0, 1.2, 1.5]
+    description: "News/Macro analyst weight (fundamental signals)"
+
+  # Regime/DSI risk analyst
+  analist_3.weight:
+    values: [0.5, 0.8, 1.0, 1.2]
+    description: "Risk analyst weight (regime/DSI filters)"
+
+  # ---- Anomaly Detection ----
+  # Z-score threshold for anomaly detection
+  analist_1.anomaly_detection.zscore_threshold:
+    values: [1.5, 2.0, 2.5, 3.0]
+    description: "Z-score threshold (lower = more signals, higher = fewer but stronger)"
+
+  # ---- Portfolio Constraints ----
+  # Max daily trades
+  portfolio_constraints.turnover_limits.max_daily_trades:
+    values: [5, 10, 15, 20]
+    description: "Max daily trades (lower = more selective, higher = more active)"
+
+  # Cooldown after flip
+  portfolio_constraints.cooldown.hours_after_flip:
+    values: [12, 24, 48]
+    description: "Hours to wait after position flip (prevents whipsaws)"
+
+# =================================
+# Optimization Objective
+# =================================
+optimization:
+  # Primary metric to optimize
+  primary_metric: "test_sharpe"  # Options: test_sharpe, test_cagr, test_sortino
+
+  # Direction: "maximize" or "minimize"
+  direction: "maximize"
+
+  # Secondary metrics to track
+  secondary_metrics:
+    - "test_cagr"
+    - "test_max_dd"
+    - "test_win_rate"
+    - "test_profit_factor"
+
+  # Overfitting detection
+  overfitting_check:
+    enabled: true
+    # Warn if train metric >> test metric (indicates overfitting)
+    train_test_ratio_threshold: 1.5  # train_sharpe / test_sharpe > 1.5 = warning
+
+# =================================
+# Constraints
+# =================================
+constraints:
+  # Minimum acceptable metrics on test set
+  test_sharpe_min: 0.5          # Reject if test Sharpe < 0.5
+  test_max_dd_max: -50.0         # Reject if max drawdown worse than -50%
+  test_min_trades: 10            # Need at least 10 trades for statistical significance
+
+  # Risk/reward ratio
+  test_min_profit_factor: 1.2    # Reject if profit factor < 1.2
+
+# =================================
+# Execution Settings
+# =================================
+execution:
+  parallel_workers: 1            # Number of parallel backtest workers (set to CPU count for speed)
+  save_equity_curves: false      # Save full equity curves to DB (uses more space)
+  save_trade_lists: true         # Save individual trade records
+  verbose: true                  # Print progress
+
+# =================================
+# Expected Outcomes
+# =================================
+# This parameter sweep should answer:
+# 1. What's the optimal risk per trade? (Conservative vs aggressive)
+# 2. What stop-loss/take-profit ratio works best?
+# 3. Which analyst combination is most effective?
+# 4. Is the strategy robust across different parameter values?
+#
+# Look for:
+# - Top 5 configurations with best test Sharpe
+# - Consistency: Do similar params give similar results?
+# - Overfitting: Is train Sharpe >> test Sharpe?
+# - Robustness: Does small param change cause big performance change?
