@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, date, timezone
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 import yaml
 import requests
@@ -421,10 +422,16 @@ def get_symbol_news_df(session: Session, symbol: str, limit: int = 20) -> pd.Dat
     if not symbol:
         return pd.DataFrame()
 
+    ilike_pattern = f"%{symbol}%"
     query = (
         session.query(NewsArticle)
-        .filter(NewsArticle.symbols.isnot(None))
-        .filter(NewsArticle.symbols.ilike(f"%{symbol}%"))
+        .filter(
+            or_(
+                NewsArticle.symbols.ilike(ilike_pattern),
+                NewsArticle.title.ilike(ilike_pattern),
+                NewsArticle.description.ilike(ilike_pattern),
+            )
+        )
         .order_by(NewsArticle.published_at.desc())
         .limit(limit)
     )

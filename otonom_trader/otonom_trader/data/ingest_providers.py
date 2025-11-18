@@ -464,21 +464,43 @@ def ingest_news_data(
                 existing.sentiment_source = "provider"
             else:
                 # Insert new
-                symbols_list = [s for s in (getattr(article, "symbols", []) or []) if s]
+                provider_symbols = [
+                    (sym or "").strip()
+                    for sym in (getattr(article, "symbols", []) or [])
+                    if (sym or "").strip()
+                ]
+                symbols_list: list[str] = []
+
                 if normalized_symbol:
-                    if not any(
-                        (sym or "").upper() == normalized_upper for sym in symbols_list
-                    ):
-                        symbols_list.append(normalized_symbol)
-                elif not symbols_list and article and getattr(article, "symbol", None):
-                    symbols_list.append(article.symbol)
+                    symbols_list.append(normalized_symbol)
+
+                if provider_symbols:
+                    seen = {sym.upper() for sym in symbols_list}
+                    for sym in provider_symbols:
+                        key = sym.upper()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        symbols_list.append(sym)
+                elif getattr(article, "symbol", None):
+                    fallback = str(article.symbol).strip()
+                    if fallback:
+                        symbols_list.append(fallback)
 
                 if not symbols_list and normalized_symbol:
                     symbols_list.append(normalized_symbol)
 
-                symbols_str = ",".join(symbols_list) if symbols_list else (
-                    normalized_symbol if normalized_symbol else None
-                )
+                # Deduplicate while preserving order
+                deduped: list[str] = []
+                seen_keys: set[str] = set()
+                for sym in symbols_list:
+                    key = sym.upper()
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    deduped.append(sym)
+
+                symbols_str = ",".join(deduped) if deduped else normalized_symbol
 
                 description = (
                     getattr(article, "description", "")
@@ -486,12 +508,15 @@ def ingest_news_data(
                     or ""
                 )
 
+                published_at = ensure_aware(article.published_at)
+                published_at = published_at.astimezone(timezone.utc).replace(tzinfo=None)
+
                 new_article = NewsArticle(
                     source=article.source,
                     title=article.title,
                     description=description,
                     url=article.url,
-                    published_at=ensure_aware(article.published_at),
+                    published_at=published_at,
                     author=article.author,
                     sentiment=article.sentiment,
                     sentiment_source="provider" if article.sentiment else None,
