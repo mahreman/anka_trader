@@ -8,7 +8,12 @@ from typing import List
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from ..domain import Asset, Anomaly as AnomalyDomain, AnomalyType
+from ..domain import (
+    Asset,
+    AssetClass,
+    Anomaly as AnomalyDomain,
+    AnomalyType,
+)
 from ..data.schema import DailyBar, Symbol, Anomaly as AnomalyORM
 from .returns import compute_returns, compute_rolling_stats, compute_volume_quantile
 from .labeling import classify_anomaly, is_anomaly
@@ -187,3 +192,68 @@ def detect_anomalies_all_assets(
             results[asset.symbol] = []
 
     return results
+
+
+def detect_anomalies_for_universe(
+    session: Session,
+    symbols: List[str],
+    lookback_days: int = 60,
+    k: float = 2.5,
+    q: float = 0.8,
+) -> List[AnomalyDomain]:
+    """Convenience helper to detect anomalies for a list of symbol strings.
+
+    Args:
+        session: Active SQLAlchemy session.
+        symbols: Ordered list of ticker symbols to scan.
+        lookback_days: Rolling window (in days) passed to the per-asset detector.
+        k: Z-score threshold.
+        q: Volume quantile threshold.
+
+    Returns:
+        List of anomaly domain objects aggregated across all requested symbols.
+    """
+
+    if not symbols:
+        return []
+
+    # Fetch symbol metadata once and keep caller order when iterating.
+    symbol_rows = (
+        session.query(Symbol)
+        .filter(Symbol.symbol.in_(symbols))
+        .all()
+    )
+    row_by_symbol = {row.symbol: row for row in symbol_rows}
+
+    def _to_asset(row: Symbol) -> Asset:
+        asset_class_value = (row.asset_class or "OTHER").upper()
+        try:
+            asset_class = AssetClass(asset_class_value)
+        except ValueError:
+            asset_class = AssetClass.OTHER
+        return Asset(
+            symbol=row.symbol,
+            name=row.name,
+            asset_class=asset_class,
+        )
+
+    anomalies: List[AnomalyDomain] = []
+    for symbol in symbols:
+        row = row_by_symbol.get(symbol)
+        if row is None:
+            logger.warning("Symbol %s not found in database for anomaly scan", symbol)
+            continue
+
+        asset = _to_asset(row)
+        anomalies.extend(
+            detect_anomalies_for_asset(
+                session=session,
+                asset=asset,
+                k=k,
+                q=q,
+                window=lookback_days,
+                persist=True,
+            )
+        )
+
+    return anomalies
