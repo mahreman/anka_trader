@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from ..data import get_session
 from ..data.ingest import ingest_incremental
+from ..data.ingest_providers import ingest_intraday_bars_all
 from ..data.symbols import get_p0_assets
 from ..data.schema import DaemonRun, Symbol, Anomaly as AnomalyORM
 from ..analytics import detect_anomalies_all_assets
@@ -46,6 +47,7 @@ class DaemonConfig:
         paper_trade_enabled: bool = True,
         paper_trade_risk_pct: float = 1.0,
         initial_cash: float = 100000.0,
+        price_interval: str = "1d",
     ):
         """
         Initialize daemon config.
@@ -60,6 +62,7 @@ class DaemonConfig:
             paper_trade_enabled: Enable paper trading
             paper_trade_risk_pct: Risk percentage per trade
             initial_cash: Initial cash for paper trader
+            price_interval: Price bar interval ("1d" or "15m")
         """
         self.ingest_days_back = ingest_days_back
         self.anomaly_lookback_days = anomaly_lookback_days
@@ -70,6 +73,7 @@ class DaemonConfig:
         self.paper_trade_enabled = paper_trade_enabled
         self.paper_trade_risk_pct = paper_trade_risk_pct
         self.initial_cash = initial_cash
+        self.price_interval = price_interval
 
 
 def run_daemon_cycle(
@@ -117,11 +121,17 @@ def run_daemon_cycle(
         logger.info("\n[1/4] Incremental data ingest...")
         assets = get_p0_assets()
 
-        ingest_results = ingest_incremental(
-            session, days_back=config.ingest_days_back, assets=assets
-        )
-
-        bars_ingested = sum(ingest_results.values())
+        if config.price_interval.lower() == "1d":
+            ingest_results = ingest_incremental(
+                session, days_back=config.ingest_days_back, assets=assets
+            )
+            bars_ingested = sum(ingest_results.values())
+        else:
+            bars_ingested = ingest_intraday_bars_all(
+                session,
+                interval=config.price_interval,
+                lookback_days=config.ingest_days_back,
+            )
         run.bars_ingested = bars_ingested
 
         logger.info(f"  ✓ Ingested {bars_ingested} bars across {len(assets)} assets")

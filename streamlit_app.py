@@ -824,6 +824,17 @@ def main():
                 help="Default is 900 seconds (15 minutes).",
             )
 
+            price_interval_options = ["1d", "15m"]
+            price_interval_value = str(orch_section.get("price_interval", "15m")).lower()
+            if price_interval_value not in price_interval_options:
+                price_interval_value = "15m"
+            price_interval = st.selectbox(
+                "Price Interval",
+                options=price_interval_options,
+                index=price_interval_options.index(price_interval_value),
+                help="Choose the bar size used during ingestion (1d for EOD or 15m for intraday).",
+            )
+
             db_path = st.text_input(
                 "DB Path",
                 value=str(orch_section.get("db_path", "data/trader.db")),
@@ -878,6 +889,7 @@ def main():
                     "enabled": enabled,
                     "mode": mode,
                     "interval_seconds": int(interval_seconds),
+                    "price_interval": price_interval,
                     "db_path": db_path,
                     "strategy_path": strategy_path,
                     "broker_config_path": broker_cfg_path,

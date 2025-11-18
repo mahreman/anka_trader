@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any
 
 import requests
@@ -128,11 +128,29 @@ class BinanceProvider(PriceProvider):
 
         return symbol
 
+    def _to_timestamp_ms(self, value: date | datetime, is_end: bool) -> int:
+        """Convert a date/datetime to Binance milliseconds."""
+
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            dt = datetime.combine(
+                value,
+                datetime.max.time() if is_end else datetime.min.time(),
+            )
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+
+        return int(dt.timestamp() * 1000)
+
     def fetch_ohlcv(
         self,
         symbol: str,
-        start_date: date,
-        end_date: date,
+        start_date: date | datetime,
+        end_date: date | datetime,
         interval: str = "1d",
     ) -> List[OHLCVBar]:
         """
@@ -156,8 +174,8 @@ class BinanceProvider(PriceProvider):
         binance_interval = self.interval_map.get(interval, "1d")
 
         # Convert dates to milliseconds timestamps
-        start_ms = int(datetime.combine(start_date, datetime.min.time()).timestamp() * 1000)
-        end_ms = int(datetime.combine(end_date, datetime.max.time()).timestamp() * 1000)
+        start_ms = self._to_timestamp_ms(start_date, is_end=False)
+        end_ms = self._to_timestamp_ms(end_date, is_end=True)
 
         # Fetch klines (OHLCV)
         params = {
@@ -190,11 +208,11 @@ class BinanceProvider(PriceProvider):
             for kline in data:
                 # Binance kline format:
                 # [open_time, open, high, low, close, volume, close_time, ...]
-                bar_date = datetime.fromtimestamp(kline[0] / 1000).date()
+                bar_time = datetime.fromtimestamp(kline[0] / 1000, tz=timezone.utc)
 
                 bar = OHLCVBar(
                     symbol=symbol,  # Use original symbol
-                    date=bar_date,
+                    date=bar_time,
                     open=float(kline[1]),
                     high=float(kline[2]),
                     low=float(kline[3]),

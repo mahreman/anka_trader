@@ -50,8 +50,8 @@ class YFinanceProvider(PriceProvider):
     def fetch_ohlcv(
         self,
         symbol: str,
-        start_date: date,
-        end_date: date,
+        start_date: date | datetime,
+        end_date: date | datetime,
         interval: str = "1d",
     ) -> List[OHLCVBar]:
         """
@@ -94,19 +94,21 @@ class YFinanceProvider(PriceProvider):
             df.columns = [c.lower().replace(" ", "_") for c in df.columns]
 
             for _, row in df.iterrows():
-                # Get date (handle both Date and Datetime columns)
+                # Get timestamp (handle both Date and Datetime columns)
                 if "date" in df.columns:
-                    bar_date = pd.to_datetime(row["date"]).date()
+                    ts_value = row["date"]
                 elif "datetime" in df.columns:
-                    bar_date = pd.to_datetime(row["datetime"]).date()
+                    ts_value = row["datetime"]
                 else:
                     logger.error(f"No date column found in yfinance data for {symbol}")
                     continue
 
+                bar_ts = pd.to_datetime(ts_value, utc=True).to_pydatetime()
+
                 # Create bar
                 bar = OHLCVBar(
                     symbol=symbol,
-                    date=bar_date,
+                    date=bar_ts,
                     open=float(row["open"]),
                     high=float(row["high"]),
                     low=float(row["low"]),

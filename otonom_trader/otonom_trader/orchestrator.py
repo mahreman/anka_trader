@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -60,6 +60,7 @@ class OrchestratorConfig:
     initial_cash: float = 100_000.0
     ingest_days_back: int = 7
     anomaly_lookback_days: int = 30
+    price_interval: str = "15m"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OrchestratorConfig":
@@ -76,6 +77,7 @@ class OrchestratorConfig:
             initial_cash=float(data.get("initial_cash", 100_000.0)),
             ingest_days_back=int(data.get("ingest_days_back", 7)),
             anomaly_lookback_days=int(data.get("anomaly_lookback_days", 30)),
+            price_interval=str(data.get("price_interval", "15m")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -176,7 +178,7 @@ def run_orchestrator_loop() -> None:
             continue
 
         cycle += 1
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         logger.info(
             "===== Orchestrator cycle #%d starting at %s (mode=%s) =====",
             cycle,
@@ -202,6 +204,7 @@ def run_orchestrator_loop() -> None:
                     paper_trade_enabled=paper_enabled,
                     paper_trade_risk_pct=cfg.paper_trade_risk_pct,
                     initial_cash=cfg.initial_cash,
+                    price_interval=cfg.price_interval,
                 )
 
                 paper_trader = None
@@ -231,7 +234,7 @@ def run_orchestrator_loop() -> None:
                 logger.info("TradingDaemon run_once() completed (mode=%s).", mode)
 
             # 3) Alert engine health checks
-            alerts.check_and_notify(datetime.utcnow())
+            alerts.check_and_notify(datetime.now(timezone.utc))
 
         except KeyboardInterrupt:
             logger.info("Orchestrator stopped by user.")
@@ -239,7 +242,7 @@ def run_orchestrator_loop() -> None:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Orchestrator cycle #%d failed: %s", cycle, exc, exc_info=True)
 
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         elapsed = (end_time - start_time).total_seconds()
         target_interval = max(cfg.interval_seconds, 60)
         sleep_for = max(target_interval - elapsed, 0)

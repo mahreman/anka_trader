@@ -7,7 +7,7 @@ Integrates price, news, and macro data from multiple sources into database.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, List, Dict
 
 from sqlalchemy.orm import Session
@@ -21,7 +21,7 @@ from ..providers import (
     ProviderError,
 )
 from ..providers.base import OHLCVBar, NewsArticle as ProviderNewsArticle, MacroIndicator as ProviderMacroIndicator
-from .schema import Symbol, DailyBar, NewsArticle, MacroIndicator
+from .schema import Symbol, DailyBar, IntradayBar, NewsArticle, MacroIndicator
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,11 @@ def ingest_price_data(
         # Upsert bars
         count = 0
         for bar in bars:
+            bar_date = bar.date.date() if isinstance(bar.date, datetime) else bar.date
             # Check if bar exists
             existing = (
                 session.query(DailyBar)
-                .filter_by(symbol_id=symbol_obj.id, date=bar.date)
+                .filter_by(symbol_id=symbol_obj.id, date=bar_date)
                 .first()
             )
 
@@ -101,7 +102,7 @@ def ingest_price_data(
                 # Insert new
                 new_bar = DailyBar(
                     symbol_id=symbol_obj.id,
-                    date=bar.date,
+                    date=bar_date,
                     open=bar.open,
                     high=bar.high,
                     low=bar.low,
@@ -122,6 +123,172 @@ def ingest_price_data(
         logger.error(f"Failed to ingest price data for {symbol}: {e}")
         session.rollback()
         return 0
+
+
+def _interval_to_timedelta(interval: str) -> timedelta:
+    interval = (interval or "15m").lower()
+
+    try:
+        qty = int(interval[:-1])
+        unit = interval[-1]
+    except ValueError:
+        return timedelta(minutes=15)
+
+    if unit == "m":
+        return timedelta(minutes=qty)
+    if unit == "h":
+        return timedelta(hours=qty)
+    if unit == "d":
+        return timedelta(days=qty)
+    if unit == "w":
+        return timedelta(weeks=qty)
+    return timedelta(minutes=15)
+
+
+def _normalize_timestamp(value: date | datetime) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.combine(value, datetime.min.time())
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def ingest_intraday_bars_for_symbol(
+    session: Session,
+    symbol_obj: Symbol,
+    interval: str = "15m",
+    lookback_days: int = 7,
+    provider = None,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest intraday bars for a single symbol."""
+
+    local_provider = provider or get_primary_price_provider(provider_config_path)
+    if local_provider is None:
+        logger.warning("No price provider available for intraday ingest")
+        return 0
+
+    now_utc = datetime.now(timezone.utc)
+    delta = _interval_to_timedelta(interval)
+
+    last_bar = (
+        session.query(IntradayBar)
+        .filter_by(symbol_id=symbol_obj.id, interval=interval)
+        .order_by(IntradayBar.ts.desc())
+        .first()
+    )
+
+    if last_bar:
+        last_ts = last_bar.ts
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        start_ts = last_ts + delta
+    else:
+        start_ts = now_utc - timedelta(days=lookback_days)
+
+    if start_ts >= now_utc:
+        return 0
+
+    logger.info(
+        "Fetching %s bars for %s from %s to %s",
+        interval,
+        symbol_obj.symbol,
+        start_ts,
+        now_utc,
+    )
+
+    try:
+        bars = local_provider.fetch_ohlcv(
+            symbol_obj.symbol,
+            start_ts,
+            now_utc,
+            interval=interval,
+        )
+    except ProviderError as exc:
+        logger.error("Failed to fetch intraday data for %s: %s", symbol_obj.symbol, exc)
+        return 0
+
+    if not bars:
+        return 0
+
+    count = 0
+    for bar in bars:
+        bar_ts = _normalize_timestamp(bar.date)
+        if bar_ts < start_ts:
+            continue
+
+        ts_value = bar_ts.replace(tzinfo=None)
+
+        existing = (
+            session.query(IntradayBar)
+            .filter_by(symbol_id=symbol_obj.id, ts=ts_value, interval=interval)
+            .first()
+        )
+
+        if existing:
+            existing.open = bar.open
+            existing.high = bar.high
+            existing.low = bar.low
+            existing.close = bar.close
+            existing.volume = bar.volume
+            existing.adj_close = bar.adj_close
+        else:
+            session.add(
+                IntradayBar(
+                    symbol_id=symbol_obj.id,
+                    ts=ts_value,
+                    interval=interval,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    adj_close=bar.adj_close,
+                )
+            )
+
+        count += 1
+
+    return count
+
+
+def ingest_intraday_bars_all(
+    session: Session,
+    interval: str = "15m",
+    lookback_days: int = 7,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest intraday bars for all symbols in the database."""
+
+    symbols = session.query(Symbol).order_by(Symbol.symbol.asc()).all()
+    if not symbols:
+        logger.info("No symbols available for intraday ingest")
+        return 0
+
+    provider = get_primary_price_provider(provider_config_path)
+    if provider is None:
+        logger.warning("Cannot ingest intraday data without an enabled price provider")
+        return 0
+
+    total = 0
+    for symbol_obj in symbols:
+        count = ingest_intraday_bars_for_symbol(
+            session,
+            symbol_obj,
+            interval=interval,
+            lookback_days=lookback_days,
+            provider=provider,
+            provider_config_path=provider_config_path,
+        )
+        if count:
+            session.commit()
+        total += count
+
+    logger.info("Ingested %s intraday bars across %s symbols", total, len(symbols))
+    return total
 
 
 def ingest_news_data(

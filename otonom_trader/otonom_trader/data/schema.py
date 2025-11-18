@@ -35,6 +35,11 @@ class Symbol(Base):
 
     # Relationships
     daily_bars = relationship("DailyBar", back_populates="symbol_obj", cascade="all, delete-orphan")
+    intraday_bars = relationship(
+        "IntradayBar",
+        back_populates="symbol_obj",
+        cascade="all, delete-orphan",
+    )
     anomalies = relationship("Anomaly", back_populates="symbol_obj", cascade="all, delete-orphan")
     decisions = relationship("Decision", back_populates="symbol_obj", cascade="all, delete-orphan")
     regimes = relationship("Regime", back_populates="symbol_obj", cascade="all, delete-orphan")
@@ -70,6 +75,32 @@ class DailyBar(Base):
 
     def __repr__(self) -> str:
         return f"<DailyBar(symbol_id={self.symbol_id}, date={self.date}, close={self.close})>"
+
+
+class IntradayBar(Base):
+    """Higher-frequency OHLCV bars (e.g., 15m)."""
+
+    __tablename__ = "intraday_bars"
+    __table_args__ = (
+        UniqueConstraint("symbol_id", "ts", "interval", name="uq_intraday_symbol_ts_interval"),
+        Index("ix_intraday_symbol_ts", "symbol_id", "ts"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol_id = Column(Integer, ForeignKey("symbols.id"), nullable=False)
+    ts = Column(DateTime, nullable=False)
+    interval = Column(String(8), nullable=False, default="15m")
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    adj_close = Column(Float, nullable=True)
+    volume = Column(Float, nullable=False)
+
+    symbol_obj = relationship("Symbol", back_populates="intraday_bars")
+
+    def __repr__(self) -> str:
+        return f"<IntradayBar(symbol_id={self.symbol_id}, ts={self.ts}, interval={self.interval})>"
 
 
 class Anomaly(Base):
