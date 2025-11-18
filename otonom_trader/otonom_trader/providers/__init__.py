@@ -14,7 +14,15 @@ from .base import (
     ProviderError,
     RateLimitError,
 )
-from .factory import create_price_provider, create_news_provider, create_macro_provider
+from .factory import (
+    create_price_provider,
+    create_news_provider,
+    create_macro_provider,
+    create_all_providers,
+    get_primary_price_provider,
+    get_primary_news_provider,
+    get_primary_macro_provider,
+)
 from .config import ProviderConfig, get_provider_config
 
 __all__ = [
@@ -28,6 +36,10 @@ __all__ = [
     "create_price_provider",
     "create_news_provider",
     "create_macro_provider",
+    "create_all_providers",
+    "get_primary_price_provider",
+    "get_primary_news_provider",
+    "get_primary_macro_provider",
     # Config
     "ProviderConfig",
     "get_provider_config",
