@@ -30,6 +30,7 @@ from otonom_trader.data.schema import (
     PaperTrade,
     DaemonRun,
     DailyBar,
+    NewsArticle,
 )
 
 PROVIDERS_PATH = Path("config/providers.yaml")
@@ -411,6 +412,36 @@ def get_symbol_bars_df(session: Session, symbol: str, days: int = 30) -> pd.Data
                 "Volume": bar.volume,
             }
             for bar in bars
+        ]
+    )
+
+
+def get_symbol_news_df(session: Session, symbol: str, limit: int = 20) -> pd.DataFrame:
+    """Return recent news articles associated with a symbol."""
+    if not symbol:
+        return pd.DataFrame()
+
+    query = (
+        session.query(NewsArticle)
+        .filter(NewsArticle.symbols.isnot(None))
+        .filter(NewsArticle.symbols.ilike(f"%{symbol}%"))
+        .order_by(NewsArticle.published_at.desc())
+        .limit(limit)
+    )
+    articles = query.all()
+    if not articles:
+        return pd.DataFrame()
+
+    return pd.DataFrame(
+        [
+            {
+                "Title": art.title,
+                "Source": art.source,
+                "Published": art.published_at,
+                "Summary": art.description,
+                "URL": art.url,
+            }
+            for art in articles
         ]
     )
 
@@ -920,6 +951,28 @@ def main():
                     st.line_chart(bars_df.set_index("Date")["Close"], use_container_width=True)
                     st.bar_chart(bars_df.set_index("Date")["Volume"], use_container_width=True)
                     st.dataframe(bars_df.tail(50), use_container_width=True)
+
+                st.markdown("---")
+                st.markdown("### News Headlines")
+                news_df = get_symbol_news_df(session, selected_symbol, limit=25)
+                if news_df.empty:
+                    st.info("Bu sembol için haber bulunamadı ya da ingest edilmemiş.")
+                else:
+                    for _, row in news_df.iterrows():
+                        published_ts = row["Published"]
+                        published_str = (
+                            published_ts.strftime("%Y-%m-%d %H:%M UTC")
+                            if isinstance(published_ts, datetime)
+                            else str(published_ts)
+                        )
+                        summary = row["Summary"] or "Özet mevcut değil."
+                        link = row["URL"]
+                        st.markdown(
+                            f"**[{row['Title']}]({link})**  \n"
+                            f"{row['Source']} · {published_str}  \n"
+                            f"{summary}"
+                        )
+                        st.markdown("---")
 
 
 if __name__ == "__main__":
