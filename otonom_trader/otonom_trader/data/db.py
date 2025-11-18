@@ -2,6 +2,7 @@
 Database connection and session management.
 """
 import logging
+from contextlib import contextmanager
 from typing import Generator
 
 from sqlalchemy import create_engine, Engine
@@ -59,6 +60,7 @@ def get_session_factory(engine: Engine = None) -> sessionmaker:
     return _SessionLocal
 
 
+@contextmanager
 def get_session() -> Generator[Session, None, None]:
     """
     Get a database session (context manager style).

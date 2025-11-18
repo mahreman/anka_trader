@@ -92,7 +92,7 @@ def run_orchestrator_loop(
 
             try:
                 # Create a new session for this cycle
-                with next(get_session()) as session:
+                with get_session() as session:
                     # Get or create paper trader (restores state from DB)
                     paper_trader = get_or_create_paper_trader(session, config.initial_cash)
 
