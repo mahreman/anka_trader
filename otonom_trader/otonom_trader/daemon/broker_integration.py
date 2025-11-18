@@ -14,7 +14,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from ..brokers import Broker, OrderRequest, OrderResult, create_broker
-from ..data import Decision
+from ..data import DecisionORM as Decision
 
 logger = logging.getLogger(__name__)
 
