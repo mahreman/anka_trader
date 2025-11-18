@@ -70,20 +70,10 @@ class PortfolioPosition(Base):
         return f"<PortfolioPosition(symbol_id={self.symbol_id}, qty={self.qty}, entry={self.entry_price})>"
 
 
-class PortfolioSnapshot(Base):
-    """
-    Portfolio state snapshot at a given timestamp.
+# NOTE: PortfolioSnapshot is now ONLY defined in schema.py (canonical version)
+# Import it from there instead of defining it here to avoid MetaData conflicts
+from .schema import PortfolioSnapshot
 
-    Tracks equity, cash, and drawdown for performance monitoring.
-    """
-
-    __tablename__ = "portfolio_snapshots"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    ts = Column(DateTime, nullable=False, index=True)
-    equity = Column(Float, nullable=False)  # Total portfolio value
-    cash = Column(Float, nullable=False)  # Available cash
-    max_drawdown = Column(Float, nullable=True)  # Max drawdown from peak
-
-    def __repr__(self) -> str:
-        return f"<PortfolioSnapshot(ts={self.ts}, equity={self.equity:.2f}, dd={self.max_drawdown:.2%})>"
+# Legacy duplicate definition removed to prevent table redefinition errors
+# If you need PortfolioSnapshot, import from schema.py instead:
+#   from otonom_trader.data.schema import PortfolioSnapshot
