@@ -29,8 +29,14 @@ from otonom_trader.data.ingest_providers import (
 )
 from otonom_trader.data.schema import DaemonRun
 from otonom_trader.patron.rules import run_patron_decisions
+from .paper_trader import PaperTrader
 
 log = logging.getLogger(__name__)
+
+
+# Paper trader cache keyed by DB URL so repeated orchestrator runs reuse
+# the same simulated portfolio for a database/file.
+_PAPER_TRADER_CACHE: Dict[str, PaperTrader] = {}
 
 
 @dataclass
@@ -214,3 +220,28 @@ def run_daemon_cycle(
         run.error_message = str(exc)
         session.commit()
         raise
+
+
+def get_or_create_paper_trader(
+    session: Session, initial_cash: float = 100_000.0
+) -> PaperTrader:
+    """Return a cached :class:`PaperTrader` tied to the current DB.
+
+    The orchestrator may call this helper on every cycle with a new
+    ``Session`` object; we cache per-database URL so that paper-trading
+    state persists across runs that share the same SQLite file. When a
+    cached trader is reused we simply update its session handle so it can
+    continue persisting trades in the active transaction context.
+    """
+
+    bind = session.get_bind()
+    cache_key = str(bind.url) if bind is not None else f"session:{id(session)}"
+
+    trader = _PAPER_TRADER_CACHE.get(cache_key)
+    if trader is None:
+        trader = PaperTrader(session, initial_cash=initial_cash)
+        _PAPER_TRADER_CACHE[cache_key] = trader
+    else:
+        trader.session = session
+
+    return trader
