@@ -118,6 +118,11 @@ class Anomaly(Base):
             "anomaly_type",
             name="uq_anomaly_symbol_date_type",
         ),
+        Index(
+            "ix_anomaly_symbol_date",
+            "symbol_id",
+            "date",
+        ),
         Index("ix_anomaly_symbol_date", "symbol_id", "date"),
             name="uq_anomalies_symbol_date_type",
             name="uq_anomaly_symbol_date_type",
