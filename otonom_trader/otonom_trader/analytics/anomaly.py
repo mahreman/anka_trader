@@ -4,6 +4,7 @@ Anomaly detection - Identify spikes and crashes in price movements.
 import logging
 from datetime import date, datetime, timedelta
 from typing import Dict, List
+from typing import List
 
 import pandas as pd
 from sqlalchemy.orm import Session
@@ -135,6 +136,11 @@ def detect_anomalies_for_asset(
                     )
                     if existing:
                         existing_cache[cache_key] = existing
+                existing = (
+                    session.query(AnomalyORM)
+                    .filter_by(symbol_id=symbol_obj.id, date=anomaly_date)
+                    .first()
+                )
 
                 if existing:
                     existing.anomaly_type = str(anomaly_type)
