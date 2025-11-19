@@ -1,7 +1,11 @@
 """
 Patron - Rule-based decision engine for trading signals.
 """
-from .rules import make_decision_for_anomaly, run_daily_decision_pass
+from .rules import (
+    make_decision_for_anomaly,
+    run_daily_decision_pass,
+    run_patron_decisions,
+)
 from .reporter import format_decision, format_decision_summary
 from .ensemble import (
     AnalystSignal,
@@ -19,6 +23,7 @@ from .rl_analyst_adapter import (
 __all__ = [
     "make_decision_for_anomaly",
     "run_daily_decision_pass",
+    "run_patron_decisions",
     "format_decision",
     "format_decision_summary",
     "AnalystSignal",

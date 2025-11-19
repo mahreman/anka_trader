@@ -417,6 +417,45 @@ def make_ensemble_decision_for_anomaly(
     return decision
 
 
+def run_patron_decisions(
+    session: Session,
+    anomalies: List[AnomalyDomain],
+    use_ensemble: bool = True,
+) -> List[DecisionDomain]:
+    """Run Patron on a prepared list of anomalies.
+
+    Args:
+        session: Active SQLAlchemy session.
+        anomalies: Domain anomaly objects (typically from analytics pipeline).
+        use_ensemble: Toggle for multi-analyst ensemble mode.
+
+    Returns:
+        Flat list of generated DecisionDomain objects.
+    """
+
+    decisions: List[DecisionDomain] = []
+
+    for anomaly in anomalies:
+        try:
+            if use_ensemble:
+                decision = make_ensemble_decision_for_anomaly(
+                    session, anomaly, use_ensemble=True, persist=True
+                )
+            else:
+                decision = make_decision_for_anomaly(session, anomaly, persist=True)
+
+            decisions.append(decision)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.error(
+                "Failed to make decision for %s on %s: %s",
+                anomaly.asset_symbol,
+                anomaly.date,
+                exc,
+            )
+
+    return decisions
+
+
 def run_daily_decision_pass(
     session: Session, days_back: int = 30, use_ensemble: bool = False
 ) -> dict[str, List[DecisionDomain]]:
