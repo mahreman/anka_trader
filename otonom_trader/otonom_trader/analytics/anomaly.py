@@ -3,6 +3,7 @@ Anomaly detection - Identify spikes and crashes in price movements.
 """
 import logging
 from datetime import date, datetime, timedelta
+from typing import Dict, List
 from typing import List
 
 import pandas as pd
@@ -91,6 +92,7 @@ def detect_anomalies_for_asset(
     df = compute_volume_quantile(df, window=window)
 
     anomalies: List[AnomalyDomain] = []
+    existing_cache: Dict[date, AnomalyORM] = {}
 
     for _, row in df.iterrows():
         if pd.isna(row["ret_zscore"]) or pd.isna(row["volume_quantile"]):
@@ -124,6 +126,16 @@ def detect_anomalies_for_asset(
             anomalies.append(anomaly)
 
             if persist:
+                cache_key = anomaly_date
+                existing = existing_cache.get(cache_key)
+                if existing is None:
+                    existing = (
+                        session.query(AnomalyORM)
+                        .filter_by(symbol_id=symbol_obj.id, date=anomaly_date)
+                        .first()
+                    )
+                    if existing:
+                        existing_cache[cache_key] = existing
                 existing = (
                     session.query(AnomalyORM)
                     .filter_by(symbol_id=symbol_obj.id, date=anomaly_date)
@@ -145,6 +157,7 @@ def detect_anomalies_for_asset(
                         volume_rank=float(row["volume_quantile"]),
                     )
                     session.add(anomaly_orm)
+                    existing_cache[cache_key] = anomaly_orm
 
     if persist:
         session.commit()
