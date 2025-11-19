@@ -59,12 +59,421 @@ def _normalize_symbol_list(symbols: Optional[Sequence[str]]) -> List[str]:
     return normalized
 
 
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
 def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
     """Determine which tickers the daemon should operate on."""
 
     cleaned = _normalize_symbol_list(config.universe)
     if cleaned:
         return cleaned
+
+
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
+    tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
+    if tracked_assets:
+        return [asset.symbol for asset in tracked_assets]
+
+    # Absolute fallback to the static P0 list.
+    return [asset.symbol for asset in get_p0_assets()]
+
+
+@dataclass
+class DaemonConfig:
+    """
+    Configuration for a single daemon run.
+
+    Attributes
+    ----------
+    universe : List[str]
+        Optional list of symbols to process. If empty, fall back to all tracked
+        symbols (or the static P0 list if the database has none).
+    ingest_days_back : int
+        How many days back to ingest 15m intraday data.
+    anomaly_lookback_days : int
+        How many days back anomaly detection should consider.
+    price_interval : str
+        Price interval for intraday ingest (e.g. "15m", "1h", "1d").
+    ingest_news : bool
+        Whether to ingest news.
+    ingest_macro : bool
+        Whether to ingest macro indicators.
+    use_ensemble : bool
+        Whether Patron should use ensemble mode.
+    paper_trade_enabled : bool
+        Whether paper trades should be executed.
+    paper_trade_risk_pct : float
+        Percent of equity risked per trade.
+    initial_cash : float
+        Initial virtual cash balance for paper trading.
+    """
+
+    universe: Optional[List[str]] = field(default_factory=list)
+    ingest_days_back: int = 7
+    anomaly_lookback_days: int = 30
+    price_interval: str = "15m"
+    ingest_news: bool = True
+    ingest_macro: bool = True
+    use_ensemble: bool = True
+    paper_trade_enabled: bool = True
+    paper_trade_risk_pct: float = 1.0
+    initial_cash: float = 100_000.0
+
+
+def run_daemon_cycle(
+    session: Session,
+    config: DaemonConfig,
+    paper_trader,
+) -> DaemonRun:
+    """
+    Run a full daemon cycle and persist a DaemonRun row.
+
+    Returns
+    -------
+    DaemonRun
+        The persisted run object.
+    """
+    start_time = datetime.now(timezone.utc)
+
+    run = DaemonRun(
+        timestamp=start_time,
+        status="RUNNING",
+        bars_ingested=0,
+        anomalies_detected=0,
+        decisions_made=0,
+        trades_executed=0,
+    )
+    session.add(run)
+    session.commit()
+
+    try:
+        log.info("=" * 60)
+        log.info("Starting daemon cycle at %s", start_time)
+        log.info("=" * 60)
+
+        symbols = _resolve_universe_symbols(session, config)
+
+        # ------------------------------------------------------------------
+        # 1) Intraday data ingest
+        # ------------------------------------------------------------------
+        log.info("[1/4] Intraday data ingest (15m only)...")
+        log.info(
+            "  Intraday ingest (%s) for last %d days (universe size=%d)",
+            config.price_interval,
+            config.ingest_days_back,
+            len(symbols),
+        )
+
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
+        run.bars_ingested = bars_ingested
+
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
+
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
+        run.bars_ingested = bars_ingested
+
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
+
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
+        run.bars_ingested = bars_ingested
+
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
+        )
+
+        # Haber ingest
+        if config.ingest_news:
+            log.info("  Ingesting news data...")
+            news_count = ingest_news_for_universe(session, symbols, limit=5)
+            log.info("  ✓ Ingested %d news articles", news_count)
+
+        # Makro ingest
+        if config.ingest_macro:
+            log.info("  Ingesting macro indicators...")
+            macro_count = ingest_macro_for_universe(session)
+            log.info("  ✓ Ingested %d macro indicator rows", macro_count)
+
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
+            session,
+            symbols,
+            lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
+            use_ensemble=config.use_ensemble,
+        )
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 4) Paper trade execution
+        # ------------------------------------------------------------------
+        if config.paper_trade_enabled:
+            log.info("[4/4] Paper trade execution...")
+            trades = paper_trader.execute_decisions(
+                decisions, risk_pct=config.paper_trade_risk_pct
+            )
+            run.trades_executed = len(trades)
+            log.info("  ✓ Executed %d paper trades", len(trades))
+        else:
+            log.info("[4/4] Paper trade execution... SKIPPED")
+
+        # ------------------------------------------------------------------
+        # Finalize
+        # ------------------------------------------------------------------
+        end_time = datetime.now(timezone.utc)
+        run.duration_seconds = (end_time - start_time).total_seconds()
+        run.status = "SUCCESS"
+        session.commit()
+
+        log.info("=" * 60)
+        log.info(
+            "Daemon cycle completed in %.2fs", run.duration_seconds or 0.0
+        )
+        log.info(
+            "  Bars ingested:      %d\n"
+            "  Anomalies detected: %d\n"
+            "  Decisions made:     %d\n"
+            "  Trades executed:    %d",
+            run.bars_ingested or 0,
+            run.anomalies_detected or 0,
+            run.decisions_made or 0,
+            run.trades_executed or 0,
+        )
+        log.info("=" * 60)
+# Paper trader cache keyed by DB URL so repeated orchestrator runs reuse
+# the same simulated portfolio for a database/file.
+_PAPER_TRADER_CACHE: Dict[str, PaperTrader] = {}
+
+
+def _normalize_symbol_list(symbols: Optional[Sequence[str]]) -> List[str]:
+    """Return a cleaned list of unique ticker strings preserving order."""
+
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
+    tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
+    if tracked_assets:
+        return [asset.symbol for asset in tracked_assets]
+
+    # Absolute fallback to the static P0 list.
+    return [asset.symbol for asset in get_p0_assets()]
+
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
+    except Exception as exc:
+        log.exception("Daemon cycle failed: %s", exc)
+        run.status = "FAILED"
+        run.error_message = str(exc)
+        session.commit()
+        raise
+
+        # Haber ingest
+        if config.ingest_news:
+            log.info("  Ingesting news data...")
+            news_count = ingest_news_for_universe(session, symbols, limit=5)
+            log.info("  ✓ Ingested %d news articles", news_count)
+
+        # Makro ingest
+        if config.ingest_macro:
+            log.info("  Ingesting macro indicators...")
+            macro_count = ingest_macro_for_universe(session)
+            log.info("  ✓ Ingested %d macro indicator rows", macro_count)
+
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
+            session,
+            symbols,
+            lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
+            use_ensemble=config.use_ensemble,
+        )
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
+        session.commit()
+
+
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
+            session,
+            symbols,
+            lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
+            use_ensemble=config.use_ensemble,
+        )
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
+        session.commit()
+
+
+def get_or_create_paper_trader(
+    session: Session,
+    *,
+    price_interval: str = "15m",
+    initial_cash: float = 100_000.0,
+) -> PaperTrader:
+    """Return a cached :class:`PaperTrader` tied to the current DB.
+
+    The orchestrator may call this helper on every cycle with a new
+    ``Session`` object; we cache per-database URL so that paper-trading
+    state persists across runs that share the same SQLite file. When a
+    cached trader is reused we simply update its session handle (and the
+    active intraday interval) so it can continue persisting trades in the
+    active transaction context.
+    """
+
+    bind = session.get_bind()
+    cache_key = str(bind.url) if bind is not None else f"session:{id(session)}"
 
     tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
     if tracked_assets:
@@ -266,6 +675,9 @@ def get_or_create_paper_trader(
     *,
     price_interval: str = "15m",
     initial_cash: float = 100_000.0,
+    price_interval: str = "15m",
+    initial_cash: float = 100_000.0,
+    session: Session, initial_cash: float = 100_000.0
 ) -> PaperTrader:
     """Return a cached :class:`PaperTrader` tied to the current DB.
 
@@ -275,6 +687,8 @@ def get_or_create_paper_trader(
     cached trader is reused we simply update its session handle (and the
     active intraday interval) so it can continue persisting trades in the
     active transaction context.
+    cached trader is reused we simply update its session handle so it can
+    continue persisting trades in the active transaction context.
     """
 
     bind = session.get_bind()
@@ -291,5 +705,9 @@ def get_or_create_paper_trader(
     else:
         trader.session = session
         trader.price_interval = price_interval or trader.price_interval
+        trader = PaperTrader(session, initial_cash=initial_cash)
+        _PAPER_TRADER_CACHE[cache_key] = trader
+    else:
+        trader.session = session
 
     return trader

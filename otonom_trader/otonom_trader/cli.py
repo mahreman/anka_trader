@@ -1058,6 +1058,11 @@ def daemon_once(
                     session=session,
                     initial_cash=initial_cash,
                     price_interval=config.price_interval,
+                    session,
+                    initial_cash=initial_cash,
+                    price_interval=config.price_interval,
+                    initial_cash,
+                    config.price_interval,
                 )
 
             # Run daemon cycle
@@ -1142,6 +1147,11 @@ def daemon_loop(
                             session=session,
                             initial_cash=initial_cash,
                             price_interval=config.price_interval,
+                            session,
+                            initial_cash=initial_cash,
+                            price_interval=config.price_interval,
+                            initial_cash,
+                            config.price_interval,
                         )
 
                     # Run cycle
