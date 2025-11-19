@@ -106,13 +106,16 @@ class IntradayBar(Base):
 
 
 class Anomaly(Base):
-    """
-    Detected price anomalies (spikes/crashes).
-    """
+    """Detected price anomalies (spikes/crashes)."""
 
     __tablename__ = "anomalies"
     __table_args__ = (
-        UniqueConstraint("symbol_id", "date", name="uq_anomaly_symbol_date"),
+        UniqueConstraint(
+            "symbol_id",
+            "date",
+            "anomaly_type",
+            name="uq_anomalies_symbol_date_type",
+        ),
         Index("ix_anomalies_symbol_date", "symbol_id", "date"),
         Index("ix_anomalies_type", "anomaly_type"),
     )
@@ -123,9 +126,9 @@ class Anomaly(Base):
     anomaly_type = Column(String(20), nullable=False)  # SPIKE_UP, SPIKE_DOWN
     abs_return = Column(Float, nullable=False)  # Absolute return value
     zscore = Column(Float, nullable=False)  # Z-score of return
-    volume_rank = Column(Float, nullable=False)  # Volume percentile (0-1)
-    comment = Column(Text, nullable=True)  # Manual comment/note
-    created_at = Column(DateTime, default=utc_now)
+    volume_rank = Column(Float, nullable=True)  # Volume percentile (0-1)
+    comment = Column(String, nullable=True)  # Manual comment/note
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationships
     symbol_obj = relationship("Symbol", back_populates="anomalies")
