@@ -142,7 +142,8 @@ def create_macro_provider(config: MacroProviderConfig) -> MacroProvider:
 
     provider_config = {
         "api_key": config.api_key,
-        "base_url": config.extra.get("base_url") if config.extra else None,
+        "base_url": config.base_url
+        or (config.extra.get("base_url") if config.extra else None),
         "timeout_seconds": config.timeout_seconds,
         "extra": config.extra,
     }

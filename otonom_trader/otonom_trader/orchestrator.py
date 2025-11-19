@@ -215,7 +215,11 @@ def run_orchestrator_loop() -> None:
 
                 paper_trader = None
                 if paper_enabled:
-                    paper_trader = get_or_create_paper_trader(session, cfg.initial_cash)
+                    paper_trader = get_or_create_paper_trader(
+                        session,
+                        cfg.initial_cash,
+                        cfg.price_interval,
+                    )
 
                 run = run_daemon_cycle(session, daemon_cfg, paper_trader)
                 logger.info(
