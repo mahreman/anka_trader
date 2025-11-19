@@ -57,6 +57,7 @@ class MacroProviderConfig:
     provider_type: str  # "fred", "worldbank", "imf"
     enabled: bool = True
     api_key: Optional[str] = None
+    base_url: Optional[str] = None
     rate_limit_per_minute: int = 60
     timeout_seconds: int = 30
     extra: Dict[str, Any] = None
@@ -174,6 +175,7 @@ def load_provider_config_from_yaml(config_path: str | Path) -> ProviderConfig:
                 provider_type=p["type"],
                 enabled=p.get("enabled", True),
                 api_key=p.get("api_key"),
+                base_url=p.get("base_url"),
                 rate_limit_per_minute=p.get("rate_limit_per_minute", 60),
                 timeout_seconds=p.get("timeout_seconds", 30),
                 extra=p.get("extra", {}),
