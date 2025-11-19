@@ -217,6 +217,8 @@ def run_orchestrator_loop() -> None:
                 if paper_enabled:
                     paper_trader = get_or_create_paper_trader(
                         session,
+                        initial_cash=cfg.initial_cash,
+                        price_interval=cfg.price_interval,
                         cfg.initial_cash,
                         cfg.price_interval,
                     )
