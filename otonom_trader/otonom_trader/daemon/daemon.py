@@ -73,6 +73,37 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
     # Absolute fallback to the static P0 list.
     return [asset.symbol for asset in get_p0_assets()]
 
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
+    tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
+    if tracked_assets:
+        return [asset.symbol for asset in tracked_assets]
+
+    # Absolute fallback to the static P0 list.
+    return [asset.symbol for asset in get_p0_assets()]
+
 
 @dataclass
 class DaemonConfig:
@@ -265,6 +296,7 @@ def get_or_create_paper_trader(
     session: Session,
     initial_cash: float = 100_000.0,
     price_interval: str = "15m",
+    session: Session, initial_cash: float = 100_000.0
 ) -> PaperTrader:
     """Return a cached :class:`PaperTrader` tied to the current DB.
 
@@ -274,6 +306,8 @@ def get_or_create_paper_trader(
     cached trader is reused we simply update its session handle (and the
     active intraday interval) so it can continue persisting trades in the
     active transaction context.
+    cached trader is reused we simply update its session handle so it can
+    continue persisting trades in the active transaction context.
     """
 
     bind = session.get_bind()
@@ -290,5 +324,9 @@ def get_or_create_paper_trader(
     else:
         trader.session = session
         trader.price_interval = price_interval or trader.price_interval
+        trader = PaperTrader(session, initial_cash=initial_cash)
+        _PAPER_TRADER_CACHE[cache_key] = trader
+    else:
+        trader.session = session
 
     return trader
