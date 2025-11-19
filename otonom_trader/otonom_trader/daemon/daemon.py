@@ -1,28 +1,26 @@
 """
 Daemon loop for the autonomous trading system.
 
-This module coordinates:
-1. Incremental data ingest (prices, news, macro)
+This module coordinates a fully intraday (15m) pipeline:
+1. 15m intraday data ingest (prices, news, macro)
 2. Anomaly detection
 3. Patron decision generation
 4. Paper trade execution
 
-The daemon is intended to be called periodically by the orchestrator.
+Tüm fiyat verisi 15 dakikalık bar üzerinden çalışacak.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
 import logging
 
 from sqlalchemy.orm import Session
 
-from otonom_trader.domain import Asset, AssetClass
 from otonom_trader.analytics.anomaly import detect_anomalies_for_universe
-from otonom_trader.data.ingest import ingest_incremental
 from otonom_trader.data.ingest_providers import (
     ingest_intraday_bars_all,
     ingest_news_for_universe,
@@ -76,28 +74,6 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
     return [asset.symbol for asset in get_p0_assets()]
 
 
-def _assets_for_ingest(session: Session, symbols: Sequence[str]) -> List[Asset]:
-    """Build Asset objects for ingestion routines."""
-
-    available = {
-        asset.symbol: asset
-        for asset in get_tracked_assets(session, include_p0_fallback=True)
-    }
-
-    assets: List[Asset] = []
-    for symbol in symbols:
-        asset = available.get(symbol)
-        if asset is None:
-            asset = Asset(
-                symbol=symbol,
-                name=symbol,
-                asset_class=AssetClass.OTHER,
-                base_currency="USD",
-            )
-        assets.append(asset)
-    return assets
-
-
 @dataclass
 class DaemonConfig:
     """
@@ -109,7 +85,7 @@ class DaemonConfig:
         Optional list of symbols to process. If empty, fall back to all tracked
         symbols (or the static P0 list if the database has none).
     ingest_days_back : int
-        How many days back to ingest data for incremental daily ingest.
+        How many days back to ingest 15m intraday data.
     anomaly_lookback_days : int
         How many days back anomaly detection should consider.
     price_interval : str
@@ -171,33 +147,31 @@ def run_daemon_cycle(
         log.info("Starting daemon cycle at %s", start_time)
         log.info("=" * 60)
 
-        # ------------------------------------------------------------------
-        # 1) Incremental data ingest
-        # ------------------------------------------------------------------
-        log.info("[1/4] Incremental data ingest...")
-
         symbols = _resolve_universe_symbols(session, config)
-        assets = _assets_for_ingest(session, symbols)
 
-        # Her durumda günlük barları ingest et ki anomaly engine çalışabilsin.
-        ingest_results = ingest_incremental(
-            session, days_back=config.ingest_days_back, assets=assets
+        # ------------------------------------------------------------------
+        # 1) Intraday data ingest
+        # ------------------------------------------------------------------
+        log.info("[1/4] Intraday data ingest (15m only)...")
+        log.info(
+            "  Intraday ingest (%s) for last %d days (universe size=%d)",
+            config.price_interval,
+            config.ingest_days_back,
+            len(symbols),
         )
-        daily_bars_ingested = sum(ingest_results.values())
 
-        # Interval 1d'den farklıysa ek olarak intraday barları da çek.
-        intraday_bars_ingested = 0
-        if config.price_interval.lower() != "1d":
-            intraday_bars_ingested = ingest_intraday_bars_all(
-                session,
-                interval=config.price_interval,
-                lookback_days=config.ingest_days_back,
-            )
-
-        bars_ingested = daily_bars_ingested + intraday_bars_ingested
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
         run.bars_ingested = bars_ingested
 
-        log.info("  ✓ Ingested %d bars across %d assets", bars_ingested, len(symbols))
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
+        )
 
         # Haber ingest
         if config.ingest_news:
@@ -221,6 +195,7 @@ def run_daemon_cycle(
             session,
             symbols,
             lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
         )
         run.anomalies_detected = len(anomalies)
         log.info("  ✓ Detected %d anomalies", len(anomalies))

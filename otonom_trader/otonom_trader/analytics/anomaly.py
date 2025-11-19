@@ -2,7 +2,7 @@
 Anomaly detection - Identify spikes and crashes in price movements.
 """
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import List
 
 import pandas as pd
@@ -14,9 +14,10 @@ from ..domain import (
     Anomaly as AnomalyDomain,
     AnomalyType,
 )
-from ..data.schema import DailyBar, Symbol, Anomaly as AnomalyORM
+from ..data.schema import IntradayBar, Symbol, Anomaly as AnomalyORM
 from .returns import compute_returns, compute_rolling_stats, compute_volume_quantile
 from .labeling import classify_anomaly, is_anomaly
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -28,40 +29,38 @@ def detect_anomalies_for_asset(
     q: float = 0.8,
     window: int = 60,
     persist: bool = True,
+    interval: str = "15m",
+    lookback_days: int = 60,
 ) -> List[AnomalyDomain]:
     """
-    Detect anomalies for a specific asset.
+    Detect anomalies for a specific asset using intraday (15m) bars.
 
     Args:
         session: Database session
         asset: Asset to analyze
         k: Z-score threshold for anomaly detection
         q: Volume quantile threshold (0-1)
-        window: Rolling window size in days
+        window: Rolling window size in bars
         persist: Whether to save anomalies to database
+        interval: Intraday interval to analyze (default 15m)
+        lookback_days: How many days of history to fetch
 
     Returns:
         List of Anomaly domain objects
-
-    Process:
-        1. Fetch all daily bars for the asset
-        2. Calculate returns and rolling statistics
-        3. Identify spikes/crashes based on thresholds
-        4. Optionally persist to database
     """
     logger.info(f"Detecting anomalies for {asset.symbol}")
 
-    # Get symbol from database
     symbol_obj = session.query(Symbol).filter_by(symbol=asset.symbol).first()
     if symbol_obj is None:
         logger.warning(f"Symbol {asset.symbol} not found in database")
         return []
 
-    # Fetch all daily bars
+    cutoff = utc_now() - timedelta(days=max(lookback_days, 1))
     bars = (
-        session.query(DailyBar)
-        .filter_by(symbol_id=symbol_obj.id)
-        .order_by(DailyBar.date)
+        session.query(IntradayBar)
+        .filter_by(symbol_id=symbol_obj.id, interval=interval)
+        .filter(IntradayBar.ts >= cutoff)
+        .order_by(IntradayBar.ts.asc())
         .all()
     )
 
@@ -72,11 +71,10 @@ def detect_anomalies_for_asset(
         )
         return []
 
-    # Convert to DataFrame
     df = pd.DataFrame(
         [
             {
-                "date": bar.date,
+                "timestamp": bar.ts,
                 "open": bar.open,
                 "high": bar.high,
                 "low": bar.low,
@@ -87,20 +85,17 @@ def detect_anomalies_for_asset(
         ]
     )
 
-    # Calculate returns and statistics
+    df = df.sort_values("timestamp")
     df = compute_returns(df)
     df = compute_rolling_stats(df, window=window)
     df = compute_volume_quantile(df, window=window)
 
-    # Identify anomalies
-    anomalies = []
+    anomalies: List[AnomalyDomain] = []
 
     for _, row in df.iterrows():
-        # Skip rows with insufficient data
         if pd.isna(row["ret_zscore"]) or pd.isna(row["volume_quantile"]):
             continue
 
-        # Classify anomaly
         anomaly_type = classify_anomaly(
             zscore=row["ret_zscore"],
             volume_quantile=row["volume_quantile"],
@@ -108,11 +103,19 @@ def detect_anomalies_for_asset(
             q_threshold=q,
         )
 
-        # Only record actual anomalies
         if is_anomaly(anomaly_type):
+            ts_value = row.get("timestamp")
+            if isinstance(ts_value, pd.Timestamp):
+                ts_dt = ts_value.to_pydatetime()
+            else:
+                ts_dt = ts_value if isinstance(ts_value, datetime) else None
+            if ts_dt is None:
+                continue
+            anomaly_date = ts_dt.date()
+
             anomaly = AnomalyDomain(
                 asset_symbol=asset.symbol,
-                date=row["date"],
+                date=anomaly_date,
                 anomaly_type=anomaly_type,
                 abs_return=abs(row["ret"]),
                 zscore=row["ret_zscore"],
@@ -120,26 +123,22 @@ def detect_anomalies_for_asset(
             )
             anomalies.append(anomaly)
 
-            # Persist to database if requested
             if persist:
-                # Check if anomaly already exists
                 existing = (
                     session.query(AnomalyORM)
-                    .filter_by(symbol_id=symbol_obj.id, date=row["date"])
+                    .filter_by(symbol_id=symbol_obj.id, date=anomaly_date)
                     .first()
                 )
 
                 if existing:
-                    # Update existing
                     existing.anomaly_type = str(anomaly_type)
                     existing.abs_return = float(abs(row["ret"]))
                     existing.zscore = float(row["ret_zscore"])
                     existing.volume_rank = float(row["volume_quantile"])
                 else:
-                    # Create new
                     anomaly_orm = AnomalyORM(
                         symbol_id=symbol_obj.id,
-                        date=row["date"],
+                        date=anomaly_date,
                         anomaly_type=str(anomaly_type),
                         abs_return=float(abs(row["ret"])),
                         zscore=float(row["ret_zscore"]),
@@ -160,6 +159,8 @@ def detect_anomalies_all_assets(
     k: float = 2.5,
     q: float = 0.8,
     window: int = 60,
+    interval: str = "15m",
+    lookback_days: int = 60,
 ) -> dict[str, List[AnomalyDomain]]:
     """
     Detect anomalies for all assets.
@@ -185,6 +186,8 @@ def detect_anomalies_all_assets(
                 q=q,
                 window=window,
                 persist=True,
+                interval=interval,
+                lookback_days=lookback_days,
             )
             results[asset.symbol] = anomalies
         except Exception as e:
@@ -200,6 +203,7 @@ def detect_anomalies_for_universe(
     lookback_days: int = 60,
     k: float = 2.5,
     q: float = 0.8,
+    interval: str = "15m",
 ) -> List[AnomalyDomain]:
     """Convenience helper to detect anomalies for a list of symbol strings.
 
@@ -209,6 +213,7 @@ def detect_anomalies_for_universe(
         lookback_days: Rolling window (in days) passed to the per-asset detector.
         k: Z-score threshold.
         q: Volume quantile threshold.
+        interval: Intraday interval to analyze (default 15m).
 
     Returns:
         List of anomaly domain objects aggregated across all requested symbols.
@@ -253,6 +258,8 @@ def detect_anomalies_for_universe(
                 q=q,
                 window=lookback_days,
                 persist=True,
+                interval=interval,
+                lookback_days=lookback_days,
             )
         )
 
