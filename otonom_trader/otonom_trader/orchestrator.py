@@ -219,6 +219,8 @@ def run_orchestrator_loop() -> None:
                         session,
                         initial_cash=cfg.initial_cash,
                         price_interval=cfg.price_interval,
+                        cfg.initial_cash,
+                        cfg.price_interval,
                     )
 
                 run = run_daemon_cycle(session, daemon_cfg, paper_trader)
