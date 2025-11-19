@@ -37,6 +37,8 @@ class AnomalyType(str, Enum):
     SPIKE_UP = "SPIKE_UP"
     SPIKE_DOWN = "SPIKE_DOWN"
     NONE = "NONE"
+    # Backwards compatibility alias – older analysts referenced SURGE
+    SURGE = SPIKE_UP
 
     def __str__(self) -> str:
         return self.value
