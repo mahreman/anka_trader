@@ -18,6 +18,7 @@ from otonom_trader.data.schema import Symbol, Decision
 from otonom_trader.brokers import create_broker
 from otonom_trader.daemon.broker_integration import ShadowModeExecutor
 from otonom_trader.alerts.engine import AlertEngine
+from otonom_trader.utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ class TradingDaemon:
 
         logger.info(
             "=== Daemon tick at %s | mode=%s | strategy=%s ===",
-            datetime.utcnow().isoformat(),
+            utc_now().isoformat(),
             self.mode.value,
             self.strategy_path,
         )
@@ -211,7 +212,7 @@ class TradingDaemon:
 
                 # Mark decision as executed (if tracking)
                 # decision.executed = True
-                # decision.execution_time = datetime.utcnow()
+                # decision.execution_time = utc_now()
                 # decision.broker_order_id = execution_log.broker_order_id
 
             except Exception as e:
@@ -226,7 +227,7 @@ class TradingDaemon:
         Args:
             session: Database session
         """
-        self.alert_engine.check_and_notify(datetime.utcnow())
+        self.alert_engine.check_and_notify()
 
     def run_loop(self, interval_seconds: int = 3600) -> None:
         """

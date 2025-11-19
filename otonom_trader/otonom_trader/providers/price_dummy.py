@@ -5,7 +5,7 @@ Dummy price provider for testing and fallback.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any
 import random
 
@@ -28,21 +28,49 @@ class DummyPriceProvider(PriceProvider):
         super().__init__(config)
         logger.info("DummyPriceProvider initialized (returns synthetic data)")
 
+    def _ensure_datetime(self, value: date | datetime) -> datetime:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            dt = datetime.combine(value, datetime.min.time())
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _interval_delta(self, interval: str) -> timedelta:
+        interval = (interval or "1d").lower()
+        try:
+            qty = int(interval[:-1])
+            unit = interval[-1]
+        except ValueError:
+            qty = 1
+            unit = "d"
+
+        if unit == "m":
+            return timedelta(minutes=qty)
+        if unit == "h":
+            return timedelta(hours=qty)
+        if unit == "w":
+            return timedelta(weeks=qty)
+        return timedelta(days=qty)
+
     def fetch_ohlcv(
         self,
         symbol: str,
-        start_date: date,
-        end_date: date,
+        start_date: date | datetime,
+        end_date: date | datetime,
         interval: str = "1d",
     ) -> List[OHLCVBar]:
         """Generate synthetic OHLCV data."""
         logger.warning(f"DummyPriceProvider returning synthetic data for {symbol}")
 
         bars = []
-        current_date = start_date
+        current_dt = self._ensure_datetime(start_date)
+        end_dt = self._ensure_datetime(end_date)
+        step = self._interval_delta(interval)
         price = 100.0  # Starting price
 
-        while current_date <= end_date:
+        while current_dt <= end_dt:
             # Generate random OHLCV
             open_price = price
             close_price = price * (1 + random.uniform(-0.03, 0.03))
@@ -52,7 +80,7 @@ class DummyPriceProvider(PriceProvider):
 
             bar = OHLCVBar(
                 symbol=symbol,
-                date=current_date,
+                date=current_dt,
                 open=open_price,
                 high=high_price,
                 low=low_price,
@@ -63,8 +91,7 @@ class DummyPriceProvider(PriceProvider):
 
             bars.append(bar)
 
-            # Move to next day
-            current_date += timedelta(days=1)
+            current_dt += step
             price = close_price
 
         return bars

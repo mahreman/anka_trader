@@ -4,13 +4,13 @@ P3 preparation: Simulated trade execution and portfolio tracking.
 """
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from sqlalchemy.orm import Session
 
-from ..data.schema import Symbol, PaperTrade, DailyBar
+from ..data.schema import Symbol, PaperTrade, DailyBar, IntradayBar
 from ..domain import Decision, SignalType
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -116,17 +116,27 @@ class PaperTrader:
     Executes simulated trades based on decisions.
     """
 
-    def __init__(self, session: Session, initial_cash: float = 100000.0):
+    def __init__(
+        self,
+        session: Session,
+        initial_cash: float = 100000.0,
+        price_interval: str = "15m",
+    ):
         """
         Initialize paper trader.
 
         Args:
             session: Database session
             initial_cash: Initial cash balance
+            price_interval: Intraday interval used when looking up prices
         """
         self.session = session
         self.portfolio = PortfolioState(cash=initial_cash)
-        logger.info(f"Initialized paper trader with ${initial_cash:,.2f}")
+        self.trade_history: List[PaperTrade] = []
+        self.price_interval = price_interval
+        logger.info(
+            f"Initialized paper trader with ${initial_cash:,.2f} (interval={self.price_interval})"
+        )
 
     def get_current_price(self, symbol: str) -> Optional[float]:
         """
@@ -149,7 +159,17 @@ class PaperTrader:
             .first()
         )
 
-        return latest_bar.close if latest_bar else None
+        if latest_bar:
+            return latest_bar.close
+
+        latest_intraday = (
+            self.session.query(IntradayBar)
+            .filter_by(symbol_id=symbol_obj.id, interval=self.price_interval)
+            .order_by(IntradayBar.ts.desc())
+            .first()
+        )
+
+        return latest_intraday.close if latest_intraday else None
 
     def calculate_position_size(
         self, symbol: str, price: float, risk_pct: float = 1.0
@@ -325,6 +345,19 @@ class PaperTrader:
 
         return None
 
+    def execute_decisions(
+        self, decisions: List[Decision], risk_pct: float = 1.0
+    ) -> List[PaperTrade]:
+        """Execute multiple trading decisions sequentially."""
+
+        executed_trades: List[PaperTrade] = []
+        for decision in decisions:
+            trade = self.execute_decision(decision, risk_pct=risk_pct)
+            if trade is not None:
+                executed_trades.append(trade)
+
+        return executed_trades
+
     def update_portfolio_prices(self):
         """Update current prices for all positions."""
         prices = {}
@@ -365,7 +398,7 @@ class PaperTrader:
 
         # Create trade record
         trade = PaperTrade(
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
             symbol_id=symbol_obj.id,
             decision_id=decision_id,
             action=action,
@@ -453,7 +486,7 @@ class PaperTrader:
 
         # Create snapshot
         snapshot = PortfolioSnapshot(
-            timestamp=datetime.utcnow(),
+            timestamp=utc_now(),
             equity=equity,
             cash=cash,
             positions_value=positions_value,

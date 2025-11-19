@@ -15,6 +15,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from ..data import Experiment, ExperimentRun
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ class ExperimentReport:
         # Header
         lines.append(f"# Experiment Report: {self.experiment.name}")
         lines.append("")
-        lines.append(f"**Generated**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        lines.append(f"**Generated**: {utc_now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
         lines.append("")
 
         # Metadata
@@ -264,7 +265,7 @@ class ExperimentReport:
 
         # Add content sections as HTML
         html += f"<h1>Experiment Report: {self.experiment.name}</h1>\n"
-        html += f"<p><strong>Generated</strong>: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>\n"
+        html += f"<p><strong>Generated</strong>: {utc_now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>\n"
 
         # Metadata
         html += "<h2>Experiment Metadata</h2>\n"

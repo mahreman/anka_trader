@@ -25,12 +25,12 @@ Note:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from otonom_trader.data import get_engine, init_db, get_session
 from otonom_trader.data.schema import Symbol
 from otonom_trader.analytics.regime import compute_regimes_for_symbol, persist_regimes
 from otonom_trader.analytics.dsi import compute_dsi_for_symbol, persist_dsi
+from otonom_trader.utils import utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def run_once() -> None:
     6. Execute trades (P3)
     """
     logger.info("=" * 60)
-    logger.info("Daemon cycle started at %s", datetime.utcnow().isoformat())
+    logger.info("Daemon cycle started at %s", utc_now().isoformat())
     logger.info("=" * 60)
 
     engine = get_engine()
@@ -118,7 +118,7 @@ def run_once() -> None:
     # execute_pending_orders()
 
     logger.info("=" * 60)
-    logger.info("Daemon cycle completed at %s", datetime.utcnow().isoformat())
+    logger.info("Daemon cycle completed at %s", utc_now().isoformat())
     logger.info("=" * 60)
 
 

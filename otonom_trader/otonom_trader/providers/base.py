@@ -38,11 +38,11 @@ class AuthenticationError(ProviderError):
 @dataclass
 class OHLCVBar:
     """
-    OHLCV price bar.
+    OHLCV price bar (daily or intraday).
 
     Attributes:
         symbol: Asset symbol
-        date: Bar date
+        date: Timestamp of the bar (UTC recommended)
         open: Opening price
         high: High price
         low: Low price
@@ -50,8 +50,9 @@ class OHLCVBar:
         volume: Trading volume
         adj_close: Adjusted close (optional)
     """
+
     symbol: str
-    date: date
+    date: datetime
     open: float
     high: float
     low: float
@@ -171,8 +172,8 @@ class PriceProvider(ABC):
     def fetch_ohlcv(
         self,
         symbol: str,
-        start_date: date,
-        end_date: date,
+        start_date: date | datetime,
+        end_date: date | datetime,
         interval: str = "1d",
     ) -> List[OHLCVBar]:
         """

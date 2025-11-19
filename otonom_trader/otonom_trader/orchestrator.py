@@ -19,16 +19,16 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Set
 
 import yaml
 
-from .data import get_session
+from .data import get_session, get_engine, init_db
 from .daemon.daemon import DaemonConfig, run_daemon_cycle, get_or_create_paper_trader
 from .daemon.trading_daemon import TradingDaemon, ExecutionMode
 from .alerts.engine import AlertEngine
+from .utils import utc_now
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ class OrchestratorConfig:
     initial_cash: float = 100_000.0
     ingest_days_back: int = 7
     anomaly_lookback_days: int = 30
+    price_interval: str = "15m"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OrchestratorConfig":
@@ -76,6 +77,7 @@ class OrchestratorConfig:
             initial_cash=float(data.get("initial_cash", 100_000.0)),
             ingest_days_back=int(data.get("ingest_days_back", 7)),
             anomaly_lookback_days=int(data.get("anomaly_lookback_days", 30)),
+            price_interval=str(data.get("price_interval", "15m")),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -154,6 +156,7 @@ def run_orchestrator_loop() -> None:
     ensure_default_config_exists()
 
     alerts = AlertEngine(alerts_config_path="config/alerts.yaml")
+    initialized_db_paths: Set[str] = set()
     cycle = 0
 
     logger.info("Starting orchestrator loop...")
@@ -176,7 +179,7 @@ def run_orchestrator_loop() -> None:
             continue
 
         cycle += 1
-        start_time = datetime.utcnow()
+        start_time = utc_now()
         logger.info(
             "===== Orchestrator cycle #%d starting at %s (mode=%s) =====",
             cycle,
@@ -185,6 +188,11 @@ def run_orchestrator_loop() -> None:
         )
 
         try:
+            engine = get_engine(cfg.db_path)
+            if cfg.db_path not in initialized_db_paths:
+                init_db(engine)
+                initialized_db_paths.add(cfg.db_path)
+
             # 1) Ingestion + anomaly + ensemble + (optional) paper trader
             with get_session() as session:
                 # mode determines paper trade availability
@@ -195,6 +203,9 @@ def run_orchestrator_loop() -> None:
                 else:  # live
                     paper_enabled = False
 
+                # Build the daemon configuration once per cycle so we pass a
+                # clean, explicit snapshot of the current orchestrator
+                # settings into the daemon layer.
                 daemon_cfg = DaemonConfig(
                     ingest_days_back=cfg.ingest_days_back,
                     anomaly_lookback_days=cfg.anomaly_lookback_days,
@@ -202,13 +213,30 @@ def run_orchestrator_loop() -> None:
                     paper_trade_enabled=paper_enabled,
                     paper_trade_risk_pct=cfg.paper_trade_risk_pct,
                     initial_cash=cfg.initial_cash,
+                    price_interval=cfg.price_interval,
                 )
 
                 paper_trader = None
                 if paper_enabled:
-                    paper_trader = get_or_create_paper_trader(session, cfg.initial_cash)
+                    paper_trader = get_or_create_paper_trader(
+                        session=session,
+                        initial_cash=cfg.initial_cash,
+                        price_interval=cfg.price_interval,
+                    )
 
-                run = run_daemon_cycle(session, daemon_cfg, paper_trader)
+                run = run_daemon_cycle(
+                    session=session,
+                    config=daemon_cfg,
+                    paper_trader=paper_trader,
+                )
+                        session,
+                        initial_cash=cfg.initial_cash,
+                        price_interval=cfg.price_interval,
+                        cfg.initial_cash,
+                        cfg.price_interval,
+                    )
+
+                run = run_daemon_cycle(session=session, config=daemon_cfg, paper_trader=paper_trader)
                 logger.info(
                     "Daemon cycle completed: bars=%s anomalies=%s decisions=%s trades=%s status=%s",
                     run.bars_ingested,
@@ -231,7 +259,7 @@ def run_orchestrator_loop() -> None:
                 logger.info("TradingDaemon run_once() completed (mode=%s).", mode)
 
             # 3) Alert engine health checks
-            alerts.check_and_notify(datetime.utcnow())
+            alerts.check_and_notify()
 
         except KeyboardInterrupt:
             logger.info("Orchestrator stopped by user.")
@@ -239,7 +267,7 @@ def run_orchestrator_loop() -> None:
         except Exception as exc:  # pragma: no cover - defensive logging
             logger.error("Orchestrator cycle #%d failed: %s", cycle, exc, exc_info=True)
 
-        end_time = datetime.utcnow()
+        end_time = utc_now()
         elapsed = (end_time - start_time).total_seconds()
         target_interval = max(cfg.interval_seconds, 60)
         sleep_for = max(target_interval - elapsed, 0)

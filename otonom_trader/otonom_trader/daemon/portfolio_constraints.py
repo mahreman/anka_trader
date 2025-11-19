@@ -21,6 +21,7 @@ from typing import Dict, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
+from ..utils import utc_now
 logger = logging.getLogger(__name__)
 
 
@@ -139,7 +140,7 @@ class PortfolioConstraints:
             return False
 
         cooldown = self.cooldown_records[symbol]
-        return datetime.utcnow() < cooldown.cooldown_until
+        return utc_now() < cooldown.cooldown_until
 
     def _is_flip(self, symbol: str, action: str) -> bool:
         """Check if this trade would be a flip (BUY→SELL or SELL→BUY)."""
@@ -251,7 +252,7 @@ class PortfolioConstraints:
         if self._is_flip(symbol, action):
             if self._is_in_cooldown(symbol):
                 cooldown = self.cooldown_records[symbol]
-                remaining = (cooldown.cooldown_until - datetime.utcnow()).total_seconds() / 3600
+                remaining = (cooldown.cooldown_until - utc_now()).total_seconds() / 3600
                 return False, f"Symbol in cooldown (flip detected, {remaining:.1f}h remaining)"
 
         # Check correlated exposure
@@ -288,7 +289,7 @@ class PortfolioConstraints:
             return  # Don't record HOLD
 
         if timestamp is None:
-            timestamp = datetime.utcnow()
+            timestamp = utc_now()
 
         # Record trade
         trade = TradeRecord(
@@ -334,7 +335,7 @@ class PortfolioConstraints:
         today_notional = self._get_today_notional()
         active_cooldowns = sum(
             1 for c in self.cooldown_records.values()
-            if datetime.utcnow() < c.cooldown_until
+            if utc_now() < c.cooldown_until
         )
 
         return {
@@ -358,7 +359,7 @@ class PortfolioConstraints:
         Example:
             >>> constraints.cleanup_old_records(days_to_keep=7)
         """
-        cutoff = datetime.utcnow() - timedelta(days=days_to_keep)
+        cutoff = utc_now() - timedelta(days=days_to_keep)
 
         # Clean trade history
         old_count = len(self.trade_history)
@@ -368,7 +369,7 @@ class PortfolioConstraints:
         # Clean expired cooldowns
         expired_symbols = [
             symbol for symbol, cooldown in self.cooldown_records.items()
-            if cooldown.cooldown_until < datetime.utcnow()
+            if cooldown.cooldown_until < utc_now()
         ]
         for symbol in expired_symbols:
             del self.cooldown_records[symbol]

@@ -7,21 +7,28 @@ Integrates price, news, and macro data from multiple sources into database.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
-from typing import Optional, List, Dict
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional, List, Dict, Iterable
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..providers import (
-    create_all_providers,
     get_primary_price_provider,
-    get_primary_news_provider,
     get_primary_macro_provider,
     ProviderError,
 )
-from ..providers.base import OHLCVBar, NewsArticle as ProviderNewsArticle, MacroIndicator as ProviderMacroIndicator
-from .schema import Symbol, DailyBar, NewsArticle, MacroIndicator
+from ..providers.base import (
+    OHLCVBar,
+    NewsArticle as ProviderNewsArticle,
+    MacroIndicator as ProviderMacroIndicator,
+    PriceProvider,
+)
+from ..providers.config import ProviderConfig, get_provider_config
+from ..providers.factory import create_price_provider, create_news_provider
+from .schema import Symbol, DailyBar, IntradayBar, NewsArticle, MacroIndicator
+from .symbols import ensure_p0_symbols
+from ..utils import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +89,11 @@ def ingest_price_data(
         # Upsert bars
         count = 0
         for bar in bars:
+            bar_date = bar.date.date() if isinstance(bar.date, datetime) else bar.date
             # Check if bar exists
             existing = (
                 session.query(DailyBar)
-                .filter_by(symbol_id=symbol_obj.id, date=bar.date)
+                .filter_by(symbol_id=symbol_obj.id, date=bar_date)
                 .first()
             )
 
@@ -101,7 +109,7 @@ def ingest_price_data(
                 # Insert new
                 new_bar = DailyBar(
                     symbol_id=symbol_obj.id,
-                    date=bar.date,
+                    date=bar_date,
                     open=bar.open,
                     high=bar.high,
                     low=bar.low,
@@ -122,6 +130,228 @@ def ingest_price_data(
         logger.error(f"Failed to ingest price data for {symbol}: {e}")
         session.rollback()
         return 0
+
+
+def _interval_to_timedelta(interval: str) -> timedelta:
+    interval = (interval or "15m").lower()
+
+    try:
+        qty = int(interval[:-1])
+        unit = interval[-1]
+    except ValueError:
+        return timedelta(minutes=15)
+
+    if unit == "m":
+        return timedelta(minutes=qty)
+    if unit == "h":
+        return timedelta(hours=qty)
+    if unit == "d":
+        return timedelta(days=qty)
+    if unit == "w":
+        return timedelta(weeks=qty)
+    return timedelta(minutes=15)
+
+
+def _normalize_timestamp(value: date | datetime) -> datetime:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.combine(value, datetime.min.time())
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _normalize_asset_class(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    upper = value.upper()
+    if upper.startswith("ASSETCLASS."):
+        return upper.split(".", 1)[1]
+    return upper
+
+
+def _get_provider_for_type(
+    provider_type: str,
+    provider_cache: Dict[str, Optional[PriceProvider]],
+    provider_config: ProviderConfig,
+):
+    key = (provider_type or "").lower()
+    if key in provider_cache:
+        return provider_cache[key]
+
+    for p_cfg in provider_config.get_enabled_price_providers():
+        if p_cfg.provider_type.lower() == key:
+            provider = create_price_provider(p_cfg)
+            provider_cache[key] = provider
+            return provider
+
+    logger.warning("Price provider '%s' requested but not enabled", provider_type)
+    provider_cache[key] = None
+    return None
+
+
+def _resolve_intraday_provider(
+    symbol_obj: Symbol,
+    provider_cache: Dict[str, Optional[PriceProvider]],
+    provider_config: ProviderConfig,
+) -> Optional[PriceProvider]:
+    asset_class = _normalize_asset_class(symbol_obj.asset_class)
+    provider_type = "binance" if asset_class == "CRYPTO" else "yfinance"
+    provider = _get_provider_for_type(provider_type, provider_cache, provider_config)
+    if provider is None and provider_type != "yfinance":
+        # Fallback to yfinance for non-crypto assets when Binance is unavailable
+        provider = _get_provider_for_type("yfinance", provider_cache, provider_config)
+    return provider
+
+
+def ingest_intraday_bars_for_symbol(
+    session: Session,
+    symbol_obj: Symbol,
+    interval: str = "15m",
+    lookback_days: int = 7,
+    provider: Optional[PriceProvider] = None,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest intraday bars for a single symbol."""
+
+    local_provider = provider or get_primary_price_provider(provider_config_path)
+    if local_provider is None:
+        logger.warning("No price provider available for intraday ingest")
+        return 0
+
+    now_utc = datetime.now(timezone.utc)
+    delta = _interval_to_timedelta(interval)
+
+    last_bar = (
+        session.query(IntradayBar)
+        .filter_by(symbol_id=symbol_obj.id, interval=interval)
+        .order_by(IntradayBar.ts.desc())
+        .first()
+    )
+
+    if last_bar:
+        last_ts = last_bar.ts
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        start_ts = last_ts + delta
+    else:
+        start_ts = now_utc - timedelta(days=lookback_days)
+
+    if start_ts >= now_utc:
+        return 0
+
+    logger.info(
+        "Fetching %s bars for %s from %s to %s",
+        interval,
+        symbol_obj.symbol,
+        start_ts,
+        now_utc,
+    )
+
+    try:
+        bars = local_provider.fetch_ohlcv(
+            symbol_obj.symbol,
+            start_ts,
+            now_utc,
+            interval=interval,
+        )
+    except ProviderError as exc:
+        logger.error("Failed to fetch intraday data for %s: %s", symbol_obj.symbol, exc)
+        return 0
+
+    if not bars:
+        return 0
+
+    count = 0
+    for bar in bars:
+        bar_ts = _normalize_timestamp(bar.date)
+        if bar_ts < start_ts:
+            continue
+
+        ts_value = bar_ts.replace(tzinfo=None)
+
+        existing = (
+            session.query(IntradayBar)
+            .filter_by(symbol_id=symbol_obj.id, ts=ts_value, interval=interval)
+            .first()
+        )
+
+        if existing:
+            existing.open = bar.open
+            existing.high = bar.high
+            existing.low = bar.low
+            existing.close = bar.close
+            existing.volume = bar.volume
+            existing.adj_close = bar.adj_close
+        else:
+            session.add(
+                IntradayBar(
+                    symbol_id=symbol_obj.id,
+                    ts=ts_value,
+                    interval=interval,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    adj_close=bar.adj_close,
+                )
+            )
+
+        count += 1
+
+    return count
+
+
+def ingest_intraday_bars_all(
+    session: Session,
+    interval: str = "15m",
+    lookback_days: int = 7,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest intraday bars for all symbols in the database."""
+
+    seeded = ensure_p0_symbols(session)
+    if seeded:
+        logger.info("Seeded %s default symbols for intraday ingest", seeded)
+
+    symbols = session.query(Symbol).order_by(Symbol.symbol.asc()).all()
+    if not symbols:
+        logger.info("No symbols available for intraday ingest")
+        return 0
+
+    provider_cache: Dict[str, Optional[PriceProvider]] = {}
+    provider_config = get_provider_config(provider_config_path)
+
+    total = 0
+    processed = 0
+    for symbol_obj in symbols:
+        provider = _resolve_intraday_provider(symbol_obj, provider_cache, provider_config)
+        if provider is None:
+            logger.warning(
+                "Skipping %s; no provider configured for asset class '%s'",
+                symbol_obj.symbol,
+                symbol_obj.asset_class,
+            )
+            continue
+
+        count = ingest_intraday_bars_for_symbol(
+            session,
+            symbol_obj,
+            interval=interval,
+            lookback_days=lookback_days,
+            provider=provider,
+            provider_config_path=provider_config_path,
+        )
+        processed += 1
+        if count:
+            session.commit()
+        total += count
+
+    logger.info("Ingested %s intraday bars across %s symbols", total, processed)
+    return total
 
 
 def ingest_news_data(
@@ -153,19 +383,66 @@ def ingest_news_data(
     """
     logger.info(f"Ingesting news data (symbol={symbol}, limit={limit})")
 
-    # Get primary news provider
-    provider = get_primary_news_provider(provider_config_path)
+    normalized_symbol = symbol.strip() if symbol and symbol.strip() else None
+    symbol_obj: Optional[Symbol] = None
+    asset_class = ""
 
-    if provider is None:
+    if normalized_symbol:
+        symbol_obj = (
+            session.query(Symbol)
+            .filter(func.lower(Symbol.symbol) == normalized_symbol.lower())
+            .first()
+        )
+        if symbol_obj:
+            asset_class = _normalize_asset_class(symbol_obj.asset_class)
+            if asset_class == "CRYPTO":
+                logger.info(
+                    "Skipping news ingestion for crypto symbol %s", normalized_symbol
+                )
+                return 0
+        else:
+            logger.info(
+                "Symbol %s not found in DB; proceeding with news ingest without asset class gating",
+                normalized_symbol,
+            )
+
+    provider_config = get_provider_config(provider_config_path)
+    provider_cfg = None
+
+    if normalized_symbol and asset_class != "CRYPTO":
+        provider_cfg = next(
+            (
+                cfg
+                for cfg in provider_config.get_enabled_news_providers()
+                if cfg.provider_type.lower() in {"yfinance", "yfinance_news"}
+            ),
+            None,
+        )
+        if provider_cfg is None:
+            logger.debug(
+                "YFinance news provider not enabled; falling back to primary for %s",
+                normalized_symbol,
+            )
+
+    if provider_cfg is None:
+        provider_cfg = provider_config.get_primary_news_provider()
+
+    if provider_cfg is None:
         logger.warning("No enabled news provider found")
         return 0
+
+    provider = create_news_provider(provider_cfg)
+
+    now = ensure_aware(end_date) if end_date else datetime.now(timezone.utc)
+    lookback_days = provider_cfg.extra.get("days_back", 30)
+    start_dt = ensure_aware(start_date) if start_date else now - timedelta(days=lookback_days)
 
     try:
         # Fetch news articles
         articles = provider.fetch_news(
-            symbol=symbol,
-            start_date=start_date,
-            end_date=end_date,
+            symbol=normalized_symbol,
+            start_date=start_dt,
+            end_date=now,
             limit=limit,
         )
 
@@ -175,6 +452,8 @@ def ingest_news_data(
 
         # Upsert articles
         count = 0
+        normalized_upper = normalized_symbol.upper() if normalized_symbol else None
+
         for article in articles:
             # Check if article exists (by URL)
             existing = session.query(NewsArticle).filter_by(url=article.url).first()
@@ -185,14 +464,59 @@ def ingest_news_data(
                 existing.sentiment_source = "provider"
             else:
                 # Insert new
-                symbols_str = ",".join(article.symbols) if article.symbols else None
+                provider_symbols = [
+                    (sym or "").strip()
+                    for sym in (getattr(article, "symbols", []) or [])
+                    if (sym or "").strip()
+                ]
+                symbols_list: list[str] = []
+
+                if normalized_symbol:
+                    symbols_list.append(normalized_symbol)
+
+                if provider_symbols:
+                    seen = {sym.upper() for sym in symbols_list}
+                    for sym in provider_symbols:
+                        key = sym.upper()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        symbols_list.append(sym)
+                elif getattr(article, "symbol", None):
+                    fallback = str(article.symbol).strip()
+                    if fallback:
+                        symbols_list.append(fallback)
+
+                if not symbols_list and normalized_symbol:
+                    symbols_list.append(normalized_symbol)
+
+                # Deduplicate while preserving order
+                deduped: list[str] = []
+                seen_keys: set[str] = set()
+                for sym in symbols_list:
+                    key = sym.upper()
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    deduped.append(sym)
+
+                symbols_str = ",".join(deduped) if deduped else normalized_symbol
+
+                description = (
+                    getattr(article, "description", "")
+                    or getattr(article, "summary", "")
+                    or ""
+                )
+
+                published_at = ensure_aware(article.published_at)
+                published_at = published_at.astimezone(timezone.utc).replace(tzinfo=None)
 
                 new_article = NewsArticle(
                     source=article.source,
                     title=article.title,
-                    description=article.description,
+                    description=description,
                     url=article.url,
-                    published_at=article.published_at,
+                    published_at=published_at,
                     author=article.author,
                     sentiment=article.sentiment,
                     sentiment_source="provider" if article.sentiment else None,
@@ -211,6 +535,52 @@ def ingest_news_data(
         logger.error(f"Failed to ingest news data: {e}")
         session.rollback()
         return 0
+
+
+def ingest_news_for_universe(
+    session: Session,
+    symbols: Iterable[str],
+    limit: int = 50,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest news for every symbol in the configured universe.
+
+    Args:
+        session: Database session
+        symbols: Iterable of ticker strings; duplicates and falsy entries are ignored
+        limit: Maximum number of articles per symbol
+        provider_config_path: Provider configuration location
+
+    Returns:
+        Total number of articles ingested across all processed symbols.
+    """
+
+    unique_symbols: List[str] = []
+    seen: set[str] = set()
+    for sym in symbols or []:
+        key = (sym or "").strip()
+        if not key:
+            continue
+        upper = key.upper()
+        if upper in seen:
+            continue
+        seen.add(upper)
+        unique_symbols.append(key)
+
+    if not unique_symbols:
+        logger.info("No symbols provided for news ingest; skipping")
+        return 0
+
+    total = 0
+    for sym in unique_symbols:
+        total += ingest_news_data(
+            session,
+            symbol=sym,
+            limit=limit,
+            provider_config_path=provider_config_path,
+        )
+    logger.info("Ingested %s news articles across %s symbols", total, len(unique_symbols))
+    return total
 
 
 def ingest_macro_data(
@@ -296,6 +666,45 @@ def ingest_macro_data(
         logger.error(f"Failed to ingest macro data for {indicator_code}: {e}")
         session.rollback()
         return 0
+
+
+def ingest_macro_for_universe(
+    session: Session,
+    indicators: Optional[Iterable[str]] = None,
+    lookback_days: int = 365,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest macro indicators shared across the trading universe."""
+
+    indicator_list = [
+        code
+        for code in (indicators or ["DFF", "UNRATE", "CPIAUCSL"])
+        if code
+    ]
+
+    if not indicator_list:
+        logger.info("No macro indicators requested; skipping")
+        return 0
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=max(lookback_days, 1))
+
+    total = 0
+    for code in indicator_list:
+        total += ingest_macro_data(
+            session,
+            code,
+            start_date,
+            end_date,
+            provider_config_path=provider_config_path,
+        )
+
+    logger.info(
+        "Ingested %s macro indicator observations across %s indicators",
+        total,
+        len(indicator_list),
+    )
+    return total
 
 
 def ingest_all_data_types(
