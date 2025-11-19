@@ -203,6 +203,9 @@ def run_orchestrator_loop() -> None:
                 else:  # live
                     paper_enabled = False
 
+                # Build the daemon configuration once per cycle so we pass a
+                # clean, explicit snapshot of the current orchestrator
+                # settings into the daemon layer.
                 daemon_cfg = DaemonConfig(
                     ingest_days_back=cfg.ingest_days_back,
                     anomaly_lookback_days=cfg.anomaly_lookback_days,

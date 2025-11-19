@@ -237,6 +237,18 @@ def run_daemon_cycle(
             "  ✓ Ingested %d intraday bars across %d assets",
             bars_ingested,
             len(symbols),
+
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
+        run.bars_ingested = bars_ingested
+
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
         )
 
         # Haber ingest
@@ -385,6 +397,34 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
         run.error_message = str(exc)
         session.commit()
         raise
+
+        # Haber ingest
+        if config.ingest_news:
+            log.info("  Ingesting news data...")
+            news_count = ingest_news_for_universe(session, symbols, limit=5)
+            log.info("  ✓ Ingested %d news articles", news_count)
+
+        # Makro ingest
+        if config.ingest_macro:
+            log.info("  Ingesting macro indicators...")
+            macro_count = ingest_macro_for_universe(session)
+            log.info("  ✓ Ingested %d macro indicator rows", macro_count)
+
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
+            session,
+            symbols,
+            lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
 
         # Haber ingest
         if config.ingest_news:
