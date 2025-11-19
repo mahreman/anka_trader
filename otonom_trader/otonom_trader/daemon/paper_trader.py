@@ -4,7 +4,7 @@ P3 preparation: Simulated trade execution and portfolio tracking.
 """
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from sqlalchemy.orm import Session
 
@@ -324,6 +324,19 @@ class PaperTrader:
             return None
 
         return None
+
+    def execute_decisions(
+        self, decisions: List[Decision], risk_pct: float = 1.0
+    ) -> List[PaperTrade]:
+        """Execute multiple trading decisions sequentially."""
+
+        executed_trades: List[PaperTrade] = []
+        for decision in decisions:
+            trade = self.execute_decision(decision, risk_pct=risk_pct)
+            if trade is not None:
+                executed_trades.append(trade)
+
+        return executed_trades
 
     def update_portfolio_prices(self):
         """Update current prices for all positions."""
