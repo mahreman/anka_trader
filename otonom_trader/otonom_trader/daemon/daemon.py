@@ -66,6 +66,31 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
     if cleaned:
         return cleaned
 
+
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
     tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
     if tracked_assets:
         return [asset.symbol for asset in tracked_assets]
@@ -201,6 +226,55 @@ def run_daemon_cycle(
         log.info("  ✓ Detected %d anomalies", len(anomalies))
         session.commit()
 
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
+            use_ensemble=config.use_ensemble,
+        )
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 4) Paper trade execution
+        # ------------------------------------------------------------------
+        if config.paper_trade_enabled:
+            log.info("[4/4] Paper trade execution...")
+            trades = paper_trader.execute_decisions(
+                decisions, risk_pct=config.paper_trade_risk_pct
+            )
+            run.trades_executed = len(trades)
+            log.info("  ✓ Executed %d paper trades", len(trades))
+        else:
+            log.info("[4/4] Paper trade execution... SKIPPED")
+
+        # ------------------------------------------------------------------
+        # Finalize
+        # ------------------------------------------------------------------
+        end_time = datetime.now(timezone.utc)
+        run.duration_seconds = (end_time - start_time).total_seconds()
+        run.status = "SUCCESS"
+        session.commit()
+
+        log.info("=" * 60)
+        log.info(
+            "Daemon cycle completed in %.2fs", run.duration_seconds or 0.0
+        )
+        log.info(
+            "  Bars ingested:      %d\n"
+            "  Anomalies detected: %d\n"
+            "  Decisions made:     %d\n"
+            "  Trades executed:    %d",
+            run.bars_ingested or 0,
+            run.anomalies_detected or 0,
+            run.decisions_made or 0,
+            run.trades_executed or 0,
+        )
+        log.info("=" * 60)
 # Paper trader cache keyed by DB URL so repeated orchestrator runs reuse
 # the same simulated portfolio for a database/file.
 _PAPER_TRADER_CACHE: Dict[str, PaperTrader] = {}
@@ -263,6 +337,33 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
     cleaned = _normalize_symbol_list(config.universe)
     if cleaned:
         return cleaned
+
+    except Exception as exc:
+        log.exception("Daemon cycle failed: %s", exc)
+        run.status = "FAILED"
+        run.error_message = str(exc)
+        session.commit()
+        raise
+
+
+def get_or_create_paper_trader(
+    session: Session,
+    *,
+    price_interval: str = "15m",
+    initial_cash: float = 100_000.0,
+) -> PaperTrader:
+    """Return a cached :class:`PaperTrader` tied to the current DB.
+
+    The orchestrator may call this helper on every cycle with a new
+    ``Session`` object; we cache per-database URL so that paper-trading
+    state persists across runs that share the same SQLite file. When a
+    cached trader is reused we simply update its session handle (and the
+    active intraday interval) so it can continue persisting trades in the
+    active transaction context.
+    """
+
+    bind = session.get_bind()
+    cache_key = str(bind.url) if bind is not None else f"session:{id(session)}"
 
     tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
     if tracked_assets:

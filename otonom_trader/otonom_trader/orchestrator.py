@@ -233,7 +233,7 @@ def run_orchestrator_loop() -> None:
                         cfg.price_interval,
                     )
 
-                run = run_daemon_cycle(session, daemon_cfg, paper_trader)
+                run = run_daemon_cycle(session=session, config=daemon_cfg, paper_trader=paper_trader)
                 logger.info(
                     "Daemon cycle completed: bars=%s anomalies=%s decisions=%s trades=%s status=%s",
                     run.bars_ingested,

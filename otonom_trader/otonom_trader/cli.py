@@ -1055,6 +1055,9 @@ def daemon_once(
             paper_trader = None
             if not no_trade:
                 paper_trader = get_or_create_paper_trader(
+                    session=session,
+                    initial_cash=initial_cash,
+                    price_interval=config.price_interval,
                     session,
                     initial_cash=initial_cash,
                     price_interval=config.price_interval,
@@ -1141,6 +1144,9 @@ def daemon_loop(
                     paper_trader = None
                     if not no_trade:
                         paper_trader = get_or_create_paper_trader(
+                            session=session,
+                            initial_cash=initial_cash,
+                            price_interval=config.price_interval,
                             session,
                             initial_cash=initial_cash,
                             price_interval=config.price_interval,
