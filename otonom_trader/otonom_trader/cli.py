@@ -1063,7 +1063,11 @@ def daemon_once(
                 )
 
             # Run daemon cycle
-            run = run_daemon_cycle(session, config, paper_trader)
+            run = run_daemon_cycle(
+                session=session,
+                config=config,
+                paper_trader=paper_trader,
+            )
 
             if run.status == "SUCCESS":
                 typer.echo("\n✓ Daemon cycle completed successfully")
@@ -1145,7 +1149,11 @@ def daemon_loop(
                         )
 
                     # Run cycle
-                    run = run_daemon_cycle(session, config, paper_trader)
+                    run = run_daemon_cycle(
+                        session=session,
+                        config=config,
+                        paper_trader=paper_trader,
+                    )
 
                     if run.status == "SUCCESS":
                         typer.echo(f"\n✓ Cycle #{cycle_count} completed successfully")
