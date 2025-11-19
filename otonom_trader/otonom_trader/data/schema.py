@@ -109,12 +109,16 @@ class Anomaly(Base):
     """Detected price anomalies (spikes/crashes)."""
 
     __tablename__ = "anomalies"
+    # Allow multiple anomaly types per symbol/date while keeping lookups fast.
     # Allow multiple anomaly types per symbol/date while keeping fast lookups.
     __table_args__ = (
         UniqueConstraint(
             "symbol_id",
             "date",
             "anomaly_type",
+            name="uq_anomaly_symbol_date_type",
+        ),
+        Index("ix_anomaly_symbol_date", "symbol_id", "date"),
             name="uq_anomalies_symbol_date_type",
             name="uq_anomaly_symbol_date_type",
         ),
