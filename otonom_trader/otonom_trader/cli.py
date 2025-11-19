@@ -1054,10 +1054,18 @@ def daemon_once(
             # Get or create paper trader
             paper_trader = None
             if not no_trade:
-                paper_trader = get_or_create_paper_trader(session, initial_cash)
+                paper_trader = get_or_create_paper_trader(
+                    session=session,
+                    initial_cash=initial_cash,
+                    price_interval=config.price_interval,
+                )
 
             # Run daemon cycle
-            run = run_daemon_cycle(session, config, paper_trader)
+            run = run_daemon_cycle(
+                session=session,
+                config=config,
+                paper_trader=paper_trader,
+            )
 
             if run.status == "SUCCESS":
                 typer.echo("\n✓ Daemon cycle completed successfully")
@@ -1130,10 +1138,18 @@ def daemon_loop(
                     # Get or create paper trader
                     paper_trader = None
                     if not no_trade:
-                        paper_trader = get_or_create_paper_trader(session, initial_cash)
+                        paper_trader = get_or_create_paper_trader(
+                            session=session,
+                            initial_cash=initial_cash,
+                            price_interval=config.price_interval,
+                        )
 
                     # Run cycle
-                    run = run_daemon_cycle(session, config, paper_trader)
+                    run = run_daemon_cycle(
+                        session=session,
+                        config=config,
+                        paper_trader=paper_trader,
+                    )
 
                     if run.status == "SUCCESS":
                         typer.echo(f"\n✓ Cycle #{cycle_count} completed successfully")
