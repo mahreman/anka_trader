@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Iterable
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -537,6 +537,52 @@ def ingest_news_data(
         return 0
 
 
+def ingest_news_for_universe(
+    session: Session,
+    symbols: Iterable[str],
+    limit: int = 50,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest news for every symbol in the configured universe.
+
+    Args:
+        session: Database session
+        symbols: Iterable of ticker strings; duplicates and falsy entries are ignored
+        limit: Maximum number of articles per symbol
+        provider_config_path: Provider configuration location
+
+    Returns:
+        Total number of articles ingested across all processed symbols.
+    """
+
+    unique_symbols: List[str] = []
+    seen: set[str] = set()
+    for sym in symbols or []:
+        key = (sym or "").strip()
+        if not key:
+            continue
+        upper = key.upper()
+        if upper in seen:
+            continue
+        seen.add(upper)
+        unique_symbols.append(key)
+
+    if not unique_symbols:
+        logger.info("No symbols provided for news ingest; skipping")
+        return 0
+
+    total = 0
+    for sym in unique_symbols:
+        total += ingest_news_data(
+            session,
+            symbol=sym,
+            limit=limit,
+            provider_config_path=provider_config_path,
+        )
+    logger.info("Ingested %s news articles across %s symbols", total, len(unique_symbols))
+    return total
+
+
 def ingest_macro_data(
     session: Session,
     indicator_code: str,
@@ -620,6 +666,45 @@ def ingest_macro_data(
         logger.error(f"Failed to ingest macro data for {indicator_code}: {e}")
         session.rollback()
         return 0
+
+
+def ingest_macro_for_universe(
+    session: Session,
+    indicators: Optional[Iterable[str]] = None,
+    lookback_days: int = 365,
+    provider_config_path: str = "config/providers.yaml",
+) -> int:
+    """Ingest macro indicators shared across the trading universe."""
+
+    indicator_list = [
+        code
+        for code in (indicators or ["DFF", "UNRATE", "CPIAUCSL"])
+        if code
+    ]
+
+    if not indicator_list:
+        logger.info("No macro indicators requested; skipping")
+        return 0
+
+    end_date = date.today()
+    start_date = end_date - timedelta(days=max(lookback_days, 1))
+
+    total = 0
+    for code in indicator_list:
+        total += ingest_macro_data(
+            session,
+            code,
+            start_date,
+            end_date,
+            provider_config_path=provider_config_path,
+        )
+
+    logger.info(
+        "Ingested %s macro indicator observations across %s indicators",
+        total,
+        len(indicator_list),
+    )
+    return total
 
 
 def ingest_all_data_types(
