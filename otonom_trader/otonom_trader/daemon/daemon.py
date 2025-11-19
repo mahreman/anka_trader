@@ -59,6 +59,23 @@ def _normalize_symbol_list(symbols: Optional[Sequence[str]]) -> List[str]:
     return normalized
 
 
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
 def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
     """Determine which tickers the daemon should operate on."""
 
@@ -184,6 +201,18 @@ def run_daemon_cycle(
             config.ingest_days_back,
             len(symbols),
         )
+
+        bars_ingested = ingest_intraday_bars_all(
+            session,
+            interval=config.price_interval,
+            lookback_days=config.ingest_days_back,
+        )
+        run.bars_ingested = bars_ingested
+
+        log.info(
+            "  ✓ Ingested %d intraday bars across %d assets",
+            bars_ingested,
+            len(symbols),
 
         bars_ingested = ingest_intraday_bars_all(
             session,
@@ -370,6 +399,34 @@ def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[
             log.info("  ✓ Ingested %d macro indicator rows", macro_count)
 
         session.commit()
+
+        # ------------------------------------------------------------------
+        # 2) Anomaly detection
+        # ------------------------------------------------------------------
+        log.info("[2/4] Anomaly detection...")
+        anomalies = detect_anomalies_for_universe(
+            session,
+            symbols,
+            lookback_days=config.anomaly_lookback_days,
+            interval=config.price_interval,
+        )
+        run.anomalies_detected = len(anomalies)
+        log.info("  ✓ Detected %d anomalies", len(anomalies))
+        session.commit()
+
+        # ------------------------------------------------------------------
+        # 3) Patron decision generation
+        # ------------------------------------------------------------------
+        log.info("[3/4] Patron decision generation...")
+        decisions = run_patron_decisions(
+            session,
+            anomalies,
+            use_ensemble=config.use_ensemble,
+        )
+        run.decisions_made = len(decisions)
+        log.info("  ✓ Generated %d decisions", len(decisions))
+        session.commit()
+
 
         # ------------------------------------------------------------------
         # 2) Anomaly detection
