@@ -12,14 +12,15 @@ The daemon is intended to be called periodically by the orchestrator.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import logging
 
 from sqlalchemy.orm import Session
 
+from otonom_trader.domain import Asset, AssetClass
 from otonom_trader.analytics.anomaly import detect_anomalies_for_universe
 from otonom_trader.data.ingest import ingest_incremental
 from otonom_trader.data.ingest_providers import (
@@ -28,6 +29,7 @@ from otonom_trader.data.ingest_providers import (
     ingest_macro_for_universe,
 )
 from otonom_trader.data.schema import DaemonRun
+from otonom_trader.data.symbols import get_tracked_assets, get_p0_assets
 from otonom_trader.patron.rules import run_patron_decisions
 from .paper_trader import PaperTrader
 
@@ -39,6 +41,63 @@ log = logging.getLogger(__name__)
 _PAPER_TRADER_CACHE: Dict[str, PaperTrader] = {}
 
 
+def _normalize_symbol_list(symbols: Optional[Sequence[str]]) -> List[str]:
+    """Return a cleaned list of unique ticker strings preserving order."""
+
+    if not symbols:
+        return []
+
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for raw in symbols:
+        sym = (raw or "").strip()
+        if not sym:
+            continue
+        key = sym.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(sym)
+    return normalized
+
+
+def _resolve_universe_symbols(session: Session, config: "DaemonConfig") -> List[str]:
+    """Determine which tickers the daemon should operate on."""
+
+    cleaned = _normalize_symbol_list(config.universe)
+    if cleaned:
+        return cleaned
+
+    tracked_assets = get_tracked_assets(session, include_p0_fallback=True)
+    if tracked_assets:
+        return [asset.symbol for asset in tracked_assets]
+
+    # Absolute fallback to the static P0 list.
+    return [asset.symbol for asset in get_p0_assets()]
+
+
+def _assets_for_ingest(session: Session, symbols: Sequence[str]) -> List[Asset]:
+    """Build Asset objects for ingestion routines."""
+
+    available = {
+        asset.symbol: asset
+        for asset in get_tracked_assets(session, include_p0_fallback=True)
+    }
+
+    assets: List[Asset] = []
+    for symbol in symbols:
+        asset = available.get(symbol)
+        if asset is None:
+            asset = Asset(
+                symbol=symbol,
+                name=symbol,
+                asset_class=AssetClass.OTHER,
+                base_currency="USD",
+            )
+        assets.append(asset)
+    return assets
+
+
 @dataclass
 class DaemonConfig:
     """
@@ -47,7 +106,8 @@ class DaemonConfig:
     Attributes
     ----------
     universe : List[str]
-        List of symbols to process.
+        Optional list of symbols to process. If empty, fall back to all tracked
+        symbols (or the static P0 list if the database has none).
     ingest_days_back : int
         How many days back to ingest data for incremental daily ingest.
     anomaly_lookback_days : int
@@ -64,9 +124,11 @@ class DaemonConfig:
         Whether paper trades should be executed.
     paper_trade_risk_pct : float
         Percent of equity risked per trade.
+    initial_cash : float
+        Initial virtual cash balance for paper trading.
     """
 
-    universe: List[str]
+    universe: Optional[List[str]] = field(default_factory=list)
     ingest_days_back: int = 7
     anomaly_lookback_days: int = 30
     price_interval: str = "15m"
@@ -75,6 +137,7 @@ class DaemonConfig:
     use_ensemble: bool = True
     paper_trade_enabled: bool = True
     paper_trade_risk_pct: float = 1.0
+    initial_cash: float = 100_000.0
 
 
 def run_daemon_cycle(
@@ -113,7 +176,8 @@ def run_daemon_cycle(
         # ------------------------------------------------------------------
         log.info("[1/4] Incremental data ingest...")
 
-        assets = config.universe
+        symbols = _resolve_universe_symbols(session, config)
+        assets = _assets_for_ingest(session, symbols)
 
         # Her durumda günlük barları ingest et ki anomaly engine çalışabilsin.
         ingest_results = ingest_incremental(
@@ -133,12 +197,12 @@ def run_daemon_cycle(
         bars_ingested = daily_bars_ingested + intraday_bars_ingested
         run.bars_ingested = bars_ingested
 
-        log.info("  ✓ Ingested %d bars across %d assets", bars_ingested, len(assets))
+        log.info("  ✓ Ingested %d bars across %d assets", bars_ingested, len(symbols))
 
         # Haber ingest
         if config.ingest_news:
             log.info("  Ingesting news data...")
-            news_count = ingest_news_for_universe(session, assets, limit=5)
+            news_count = ingest_news_for_universe(session, symbols, limit=5)
             log.info("  ✓ Ingested %d news articles", news_count)
 
         # Makro ingest
@@ -155,7 +219,7 @@ def run_daemon_cycle(
         log.info("[2/4] Anomaly detection...")
         anomalies = detect_anomalies_for_universe(
             session,
-            assets,
+            symbols,
             lookback_days=config.anomaly_lookback_days,
         )
         run.anomalies_detected = len(anomalies)
