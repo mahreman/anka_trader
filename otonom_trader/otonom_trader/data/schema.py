@@ -110,6 +110,7 @@ class Anomaly(Base):
 
     __tablename__ = "anomalies"
     # Allow multiple anomaly types per symbol/date while keeping lookups fast.
+    # Allow multiple anomaly types per symbol/date while keeping fast lookups.
     __table_args__ = (
         UniqueConstraint(
             "symbol_id",
@@ -122,6 +123,12 @@ class Anomaly(Base):
             "symbol_id",
             "date",
         ),
+        Index("ix_anomaly_symbol_date", "symbol_id", "date"),
+            name="uq_anomalies_symbol_date_type",
+            name="uq_anomaly_symbol_date_type",
+        ),
+        Index("ix_anomalies_symbol_date", "symbol_id", "date"),
+        Index("ix_anomalies_type", "anomaly_type"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
