@@ -6,6 +6,7 @@ from .symbols import get_p0_assets
 from .schema import (
     Symbol,
     DailyBar,
+    IntradayBar,
     Anomaly as AnomalyORM,
     Decision as DecisionORM,
     Regime as RegimeORM,
@@ -27,6 +28,7 @@ __all__ = [
     "get_p0_assets",
     "Symbol",
     "DailyBar",
+    "IntradayBar",
     "AnomalyORM",
     "DecisionORM",
     "RegimeORM",

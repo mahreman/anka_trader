@@ -52,6 +52,14 @@ price_providers:
 
 # News Data Providers
 news_providers:
+  # Symbol-specific headlines via yfinance
+  - type: yfinance_news
+    enabled: true
+    rate_limit_per_minute: 120
+    timeout_seconds: 30
+    extra:
+      max_lookback_days: 30
+
   # Primary: NewsAPI (free tier: 100 req/day)
   - type: newsapi
     enabled: false

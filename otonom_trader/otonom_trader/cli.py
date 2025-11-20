@@ -24,6 +24,7 @@ from .analytics import detect_anomalies_all_assets
 from .patron import run_daily_decision_pass, format_decision_summary
 from .patron.reporter import format_anomaly_list
 from .domain import Anomaly as AnomalyDomain, Decision as DecisionDomain, AnomalyType
+from .utils import utc_now
 
 # Configure logging
 logging.basicConfig(
@@ -1053,10 +1054,23 @@ def daemon_once(
             # Get or create paper trader
             paper_trader = None
             if not no_trade:
-                paper_trader = get_or_create_paper_trader(session, initial_cash)
+                paper_trader = get_or_create_paper_trader(
+                    session=session,
+                    initial_cash=initial_cash,
+                    price_interval=config.price_interval,
+                    session,
+                    initial_cash=initial_cash,
+                    price_interval=config.price_interval,
+                    initial_cash,
+                    config.price_interval,
+                )
 
             # Run daemon cycle
-            run = run_daemon_cycle(session, config, paper_trader)
+            run = run_daemon_cycle(
+                session=session,
+                config=config,
+                paper_trader=paper_trader,
+            )
 
             if run.status == "SUCCESS":
                 typer.echo("\n✓ Daemon cycle completed successfully")
@@ -1129,10 +1143,23 @@ def daemon_loop(
                     # Get or create paper trader
                     paper_trader = None
                     if not no_trade:
-                        paper_trader = get_or_create_paper_trader(session, initial_cash)
+                        paper_trader = get_or_create_paper_trader(
+                            session=session,
+                            initial_cash=initial_cash,
+                            price_interval=config.price_interval,
+                            session,
+                            initial_cash=initial_cash,
+                            price_interval=config.price_interval,
+                            initial_cash,
+                            config.price_interval,
+                        )
 
                     # Run cycle
-                    run = run_daemon_cycle(session, config, paper_trader)
+                    run = run_daemon_cycle(
+                        session=session,
+                        config=config,
+                        paper_trader=paper_trader,
+                    )
 
                     if run.status == "SUCCESS":
                         typer.echo(f"\n✓ Cycle #{cycle_count} completed successfully")
@@ -1272,7 +1299,7 @@ def status():
     - Daemon health check
     """
     try:
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         from .data.schema import (
             Regime as RegimeORM,
             DataHealthIndex as DsiORM,
@@ -1319,7 +1346,7 @@ def status():
             typer.echo("LAST 24 HOURS")
             typer.echo("=" * 60)
 
-            now = datetime.utcnow()
+            now = utc_now()
             yesterday = now - timedelta(hours=24)
 
             # Bars ingested

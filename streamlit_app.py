@@ -11,10 +11,15 @@ Usage:
     streamlit run streamlit_app.py
 """
 
-import streamlit as st
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
+
+from typing import List, Optional, Tuple
+
 import pandas as pd
-import plotly.graph_objects as go
-from datetime import datetime, timedelta, date
+import streamlit as st
+
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from otonom_trader.data import get_session, get_engine
@@ -25,440 +30,483 @@ from otonom_trader.data.schema import (
     PortfolioSnapshot,
     PaperTrade,
     DaemonRun,
+    DailyBar,
+    NewsArticle,
 )
 
-# Page configuration
-st.set_page_config(
-    page_title="Otonom Trader Dashboard",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# Custom CSS
-st.markdown("""
-<style>
-    .big-metric {
-        font-size: 2rem;
-        font-weight: bold;
-    }
-    .positive {
-        color: #00ff00;
-    }
-    .negative {
-        color: #ff0000;
-    }
-    .neutral {
-        color: #888888;
-    }
-</style>
-""", unsafe_allow_html=True)
+PROVIDERS_PATH = Path("config/providers.yaml")
+ORCH_CONFIG_PATH = Path("config/orchestrator.yaml")
+BROKER_CONFIG_PATH = Path("config/broker.yaml")
 
 
-def get_recent_anomalies(session: Session, days: int = 7) -> pd.DataFrame:
-    """Get recent anomalies."""
-    cutoff = date.today() - timedelta(days=days)
+# -----------------------------------------------------------------------------
+# Config helpers
+# -----------------------------------------------------------------------------
 
-    anomalies = (
-        session.query(Anomaly, Symbol.symbol)
-        .join(Symbol)
-        .filter(Anomaly.date >= cutoff)
-        .order_by(Anomaly.date.desc())
-        .limit(50)
+
+def load_yaml(path: Path) -> dict:
+    import yaml
+
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def save_yaml(path: Path, data: dict) -> None:
+    import yaml
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+
+DEFAULT_ORCH_CONFIG: dict = {
+    "enabled": True,
+    "interval_seconds": 900,
+    "mode": "paper",
+    "db_path": "data/trader.db",
+    "strategy_path": "strategies/baseline_v1.0.yaml",
+    "broker_config_path": "config/broker.yaml",
+    "use_ensemble": True,
+    "paper_trade_enabled": True,
+    "paper_trade_risk_pct": 1.0,
+    "initial_cash": 100_000.0,
+    "ingest_days_back": 7,
+    "anomaly_lookback_days": 30,
+    "price_interval": "15m",
+}
+
+
+def load_orchestrator_config() -> dict:
+    """
+    Load orchestrator.yaml and merge with defaults.
+    """
+    cfg = DEFAULT_ORCH_CONFIG.copy()
+    cfg.update(load_yaml(ORCH_CONFIG_PATH))
+    return cfg
+
+
+def get_app_session() -> Session:
+    """Dashboard’ın, orchestrator ile aynı veritabanına bağlanması için
+    kullanılan session helper.
+
+    - orchestrator.yaml içinden db_path okunur
+    - get_engine(db_path) ile global engine aynı DB’ye ayarlanır
+    - Son olarak get_session() ile o engine’e bağlı Session döner
+    """
+    cfg = load_orchestrator_config()
+    # Orchestrator'ın kullandığı DB'yi zorla aktif et
+    get_engine(cfg.get("db_path", "data/trader.db"))
+    return get_session()
+
+
+def save_orchestrator_config(cfg: dict) -> None:
+    save_yaml(ORCH_CONFIG_PATH, cfg)
+
+
+def load_providers_config() -> dict:
+    return load_yaml(PROVIDERS_PATH)
+
+
+def load_broker_config() -> dict:
+    return load_yaml(BROKER_CONFIG_PATH)
+
+
+# -----------------------------------------------------------------------------
+# DB query helpers
+# -----------------------------------------------------------------------------
+
+
+def get_universe(session: Session) -> List[Symbol]:
+    return (
+        session.query(Symbol)
+        .filter(Symbol.is_active.is_(True))
+        .order_by(Symbol.symbol.asc())
         .all()
     )
 
-    if not anomalies:
-        return pd.DataFrame()
 
-    data = []
-    for anom, symbol in anomalies:
-        data.append({
-            "Date": anom.date,
-            "Symbol": symbol,
-            "Type": anom.anomaly_type,
-            "Z-Score": round(anom.zscore, 2),
-            "Return": f"{anom.abs_return:+.2%}",
-            "Volume Rank": f"{anom.volume_rank:.2%}",
-        })
-
-    return pd.DataFrame(data)
-
-
-def get_recent_decisions(session: Session, days: int = 7) -> pd.DataFrame:
-    """Get recent trading decisions."""
-    cutoff = date.today() - timedelta(days=days)
-
-    decisions = (
-        session.query(Decision, Symbol.symbol)
-        .join(Symbol)
-        .filter(Decision.date >= cutoff)
-        .order_by(Decision.date.desc())
-        .limit(50)
-        .all()
+def get_latest_daemon_run(session: Session) -> Optional[DaemonRun]:
+    return (
+        session.query(DaemonRun)
+        .order_by(DaemonRun.timestamp.desc())
+        .limit(1)
+        .one_or_none()
     )
 
-    if not decisions:
-        return pd.DataFrame()
 
-    data = []
-    for dec, symbol in decisions:
-        data.append({
-            "Date": dec.date,
-            "Symbol": symbol,
-            "Signal": dec.signal,
-            "Confidence": f"{dec.confidence:.2%}",
-            "P(Up)": f"{dec.p_up:.2%}" if dec.p_up else "N/A",
-            "Disagreement": f"{dec.disagreement:.2%}" if dec.disagreement else "N/A",
-            "Uncertainty": f"{dec.uncertainty:.2%}" if dec.uncertainty else "N/A",
-            "Reason": dec.reason[:100] + "..." if len(dec.reason) > 100 else dec.reason,
-        })
+def get_daemon_stats(session: Session) -> Tuple[int, int, float]:
+    """
+    Returns: total_runs, success_runs, avg_duration
+    """
+    total_runs = session.query(func.count(DaemonRun.id)).scalar() or 0
+    success_runs = (
+        session.query(func.count(DaemonRun.id))
+        .filter(DaemonRun.status == "SUCCESS")
+        .scalar()
+        or 0
+    )
+    avg_duration = (
+        session.query(func.avg(DaemonRun.duration_seconds)).scalar() or 0.0
+    )
+    return total_runs, success_runs, avg_duration
 
-    return pd.DataFrame(data)
+
+def get_recent_anomalies(
+    session: Session,
+    days_back: int = 7,
+    limit: int = 100,
+    symbol_filter: Optional[str] = None,
+) -> List[Anomaly]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    q = (
+        session.query(Anomaly)
+        .filter(Anomaly.timestamp >= cutoff)
+        .order_by(Anomaly.timestamp.desc())
+    )
+    if symbol_filter:
+        q = q.join(Symbol).filter(Symbol.symbol == symbol_filter)
+    return q.limit(limit).all()
 
 
-def get_portfolio_history(session: Session) -> pd.DataFrame:
-    """Get portfolio snapshot history."""
-    snapshots = (
+def get_recent_decisions(
+    session: Session,
+    days_back: int = 7,
+    limit: int = 100,
+    symbol_filter: Optional[str] = None,
+) -> List[Decision]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    q = (
+        session.query(Decision)
+        .filter(Decision.timestamp >= cutoff)
+        .order_by(Decision.timestamp.desc())
+    )
+    if symbol_filter:
+        q = q.join(Symbol).filter(Symbol.symbol == symbol_filter)
+    return q.limit(limit).all()
+
+
+def get_portfolio_history(
+    session: Session, days_back: int = 30
+) -> List[PortfolioSnapshot]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    return (
         session.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.timestamp >= cutoff)
         .order_by(PortfolioSnapshot.timestamp.asc())
         .all()
     )
 
-    if not snapshots:
-        return pd.DataFrame()
 
-    data = []
-    for snap in snapshots:
-        data.append({
-            "Timestamp": snap.timestamp,
-            "Equity": snap.equity,
-            "Cash": snap.cash,
-            "Positions Value": snap.positions_value,
-            "Drawdown": snap.max_drawdown if snap.max_drawdown else 0.0,
-        })
-
-    return pd.DataFrame(data)
-
-
-def get_recent_trades(session: Session, days: int = 7) -> pd.DataFrame:
-    """Get recent paper trades."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
-
-    trades = (
-        session.query(PaperTrade, Symbol.symbol)
-        .join(Symbol)
-        .filter(PaperTrade.timestamp >= cutoff)
-        .order_by(PaperTrade.timestamp.desc())
-        .limit(50)
+def get_recent_trades(
+    session: Session, days_back: int = 30, limit: int = 200
+) -> List[PaperTrade]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    return (
+        session.query(PaperTrade)
+        .filter(PaperTrade.opened_at >= cutoff)
+        .order_by(PaperTrade.opened_at.desc())
+        .limit(limit)
         .all()
     )
+
+
+def get_recent_news(
+    session: Session, symbol: Optional[str] = None, days_back: int = 7
+) -> List[NewsArticle]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
+    q = (
+        session.query(NewsArticle)
+        .filter(NewsArticle.published_at >= cutoff)
+        .order_by(NewsArticle.published_at.desc())
+    )
+    if symbol:
+        q = q.filter(NewsArticle.symbol == symbol)
+    return q.limit(100).all()
+
+
+# -----------------------------------------------------------------------------
+# Formatting helpers
+# -----------------------------------------------------------------------------
+
+
+def format_timedelta(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {sec:.0f}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{int(hours)}h {int(minutes)}m"
+
+
+def decision_color(decision: str) -> str:
+    decision = (decision or "").upper()
+    if decision in ("BUY", "LONG"):
+        return "🟢 BUY"
+    if decision in ("SELL", "SHORT"):
+        return "🔴 SELL"
+    if decision == "HOLD":
+        return "⚪ HOLD"
+    return decision or "N/A"
+
+
+# -----------------------------------------------------------------------------
+# Streamlit UI sections
+# -----------------------------------------------------------------------------
+
+
+def render_overview(session: Session, orch_cfg: dict) -> None:
+    st.header("Overview")
+
+    latest_run = get_latest_daemon_run(session)
+    universe = get_universe(session)
+
+    if latest_run is None:
+        st.info("No daemon runs found. Run the orchestrator first.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Mode", orch_cfg.get("mode", "paper"))
+        st.metric("Universe Size", len(universe))
+    with col2:
+        st.metric(
+            "Last Run",
+            latest_run.timestamp.astimezone(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            ),
+        )
+        st.metric("Bars Ingested (last run)", latest_run.bars_ingested or 0)
+    with col3:
+        st.metric("Anomalies (last run)", latest_run.anomalies_detected or 0)
+        st.metric("Decisions (last run)", latest_run.decisions_made or 0)
+
+
+def render_daemon_health(session: Session) -> None:
+    st.header("Daemon Health")
+
+    total_runs, success_runs, avg_duration = get_daemon_stats(session)
+    success_rate = (success_runs / total_runs * 100.0) if total_runs else 0.0
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Runs", total_runs)
+    with col2:
+        st.metric("Success Rate", f"{success_rate:.1f}%")
+    with col3:
+        st.metric("Total Trades", session.query(func.count(PaperTrade.id)).scalar() or 0)
+    with col4:
+        st.metric("Avg Duration", format_timedelta(avg_duration))
+
+    latest_run = get_latest_daemon_run(session)
+    latest_run_caption = (
+        f"Latest Run: {latest_run.timestamp if latest_run else 'N/A'} | "
+        f"Status: {latest_run.status if latest_run else 'N/A'} | "
+        f"Bars: {latest_run.bars_ingested if latest_run else 0} | "
+        f"Anomalies: {latest_run.anomalies_detected if latest_run else 0} | "
+        f"Decisions: {latest_run.decisions_made if latest_run else 0} | "
+        f"Trades: {latest_run.trades_executed if latest_run else 0}"
+    )
+    st.caption(latest_run_caption)
+
+
+def render_portfolio_performance(session: Session) -> None:
+    st.header("Portfolio Performance")
+
+    snapshots = get_portfolio_history(session, days_back=60)
+    if not snapshots:
+        st.info("No portfolio history available yet.")
+        return
+
+    df = pd.DataFrame(
+        [
+            {
+                "timestamp": s.timestamp,
+                "equity": s.equity,
+                "cash": s.cash,
+                "exposure": s.exposure,
+                "drawdown": s.max_drawdown,
+            }
+            for s in snapshots
+        ]
+    )
+
+    df.set_index("timestamp", inplace=True)
+
+    st.line_chart(df[["equity", "cash"]])
+    st.area_chart(df[["drawdown"]])
+
+
+def render_recent_activity(session: Session, symbol_filter: Optional[str]) -> None:
+    st.header("Recent Activity")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Anomalies")
+        anomalies = get_recent_anomalies(
+            session, days_back=7, limit=100, symbol_filter=symbol_filter
+        )
+        if not anomalies:
+            st.write("No recent anomalies.")
+        else:
+            rows = []
+            for a in anomalies:
+                rows.append(
+                    {
+                        "Time": a.timestamp,
+                        "Symbol": a.symbol,
+                        "Score": f"{a.score:.2f}",
+                        "Direction": a.direction,
+                        "Summary": a.summary or "",
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows))
+
+    with col2:
+        st.subheader("Decisions")
+        decisions = get_recent_decisions(
+            session, days_back=7, limit=100, symbol_filter=symbol_filter
+        )
+        if not decisions:
+            st.write("No recent decisions.")
+        else:
+            rows = []
+            for d in decisions:
+                rows.append(
+                    {
+                        "Time": d.timestamp,
+                        "Symbol": d.symbol,
+                        "Decision": decision_color(d.action),
+                        "Confidence": f"{(d.confidence or 0.0) * 100:.1f}%",
+                        "Reason": (d.rationale or "")[:200],
+                    }
+                )
+            st.dataframe(pd.DataFrame(rows))
+
+
+def render_trades(session: Session, symbol_filter: Optional[str]) -> None:
+    st.header("Recent Paper Trades")
+
+    trades = get_recent_trades(session, days_back=30, limit=200)
+    if symbol_filter:
+        trades = [t for t in trades if t.symbol == symbol_filter]
 
     if not trades:
-        return pd.DataFrame()
+        st.info("No trades executed yet.")
+        return
 
-    data = []
-    for trade, symbol in trades:
-        data.append({
-            "Timestamp": trade.timestamp,
-            "Symbol": symbol,
-            "Action": trade.action,
-            "Price": f"${trade.price:,.2f}",
-            "Quantity": f"{trade.quantity:.4f}",
-            "Value": f"${trade.value:,.2f}",
-            "Portfolio Value": f"${trade.portfolio_value:,.2f}",
-        })
+    rows = []
+    for t in trades:
+        rows.append(
+            {
+                "Opened": t.opened_at,
+                "Closed": t.closed_at,
+                "Symbol": t.symbol,
+                "Side": t.side,
+                "Qty": t.quantity,
+                "Entry": t.entry_price,
+                "Exit": t.exit_price,
+                "PnL": t.realized_pnl,
+            }
+        )
+    df = pd.DataFrame(rows)
+    st.dataframe(df)
 
-    return pd.DataFrame(data)
+
+def render_news(session: Session, symbol_filter: Optional[str]) -> None:
+    st.header("News Headlines")
+
+    news = get_recent_news(session, symbol_filter, days_back=7)
+    if not news:
+        st.info("Bu sembol için haber bulunamadı ya da ingest edilmemiş.")
+        return
+
+    rows = []
+    for n in news:
+        rows.append(
+            {
+                "Time": n.published_at,
+                "Source": n.source,
+                "Title": n.title,
+                "Symbol": n.symbol,
+            }
+        )
+    df = pd.DataFrame(rows)
+    st.dataframe(df)
 
 
-def get_daemon_stats(session: Session, days: int = 7) -> dict:
-    """Get daemon run statistics."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+def render_raw_prices(session: Session, symbol_filter: Optional[str]) -> None:
+    st.header("Raw Daily Prices")
 
-    runs = (
-        session.query(DaemonRun)
-        .filter(DaemonRun.timestamp >= cutoff)
-        .order_by(DaemonRun.timestamp.desc())
+    if not symbol_filter:
+        st.info("Grafik için bir sembol seçin.")
+        return
+
+    bars = (
+        session.query(DailyBar)
+        .filter(DailyBar.symbol == symbol_filter)
+        .order_by(DailyBar.date.asc())
         .all()
     )
+    if not bars:
+        st.info("Seçilen sembol için günlük veri yok.")
+        return
 
-    if not runs:
-        return {}
-
-    total_runs = len(runs)
-    successful_runs = sum(1 for r in runs if r.status == "SUCCESS")
-    failed_runs = total_runs - successful_runs
-
-    total_bars = sum(r.bars_ingested or 0 for r in runs)
-    total_anomalies = sum(r.anomalies_detected or 0 for r in runs)
-    total_decisions = sum(r.decisions_made or 0 for r in runs)
-    total_trades = sum(r.trades_executed or 0 for r in runs)
-
-    avg_duration = sum(r.duration_seconds or 0 for r in runs) / total_runs if total_runs > 0 else 0
-
-    latest_run = runs[0] if runs else None
-
-    return {
-        "total_runs": total_runs,
-        "successful_runs": successful_runs,
-        "failed_runs": failed_runs,
-        "success_rate": successful_runs / total_runs if total_runs > 0 else 0,
-        "total_bars": total_bars,
-        "total_anomalies": total_anomalies,
-        "total_decisions": total_decisions,
-        "total_trades": total_trades,
-        "avg_duration": avg_duration,
-        "latest_run": latest_run,
-    }
-
-
-def plot_equity_curve(df: pd.DataFrame):
-    """Plot portfolio equity curve."""
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=df["Timestamp"],
-        y=df["Equity"],
-        mode="lines",
-        name="Equity",
-        line=dict(color="#00ff00", width=2),
-    ))
-
-    fig.update_layout(
-        title="Portfolio Equity Curve",
-        xaxis_title="Date",
-        yaxis_title="Equity ($)",
-        template="plotly_dark",
-        height=400,
+    df = pd.DataFrame(
+        [
+            {
+                "Date": b.date,
+                "Open": b.open,
+                "High": b.high,
+                "Low": b.low,
+                "Close": b.close,
+                "Adj Close": b.adj_close,
+                "Volume": b.volume,
+            }
+            for b in bars
+        ]
     )
+    st.dataframe(df.set_index("Date"))
 
-    st.plotly_chart(fig, use_container_width=True)
 
-
-def plot_drawdown(df: pd.DataFrame):
-    """Plot portfolio drawdown."""
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=df["Timestamp"],
-        y=df["Drawdown"] * 100,  # Convert to percentage
-        mode="lines",
-        name="Drawdown",
-        line=dict(color="#ff0000", width=2),
-        fill="tozeroy",
-        fillcolor="rgba(255, 0, 0, 0.2)",
-    ))
-
-    fig.update_layout(
-        title="Portfolio Drawdown",
-        xaxis_title="Date",
-        yaxis_title="Drawdown (%)",
-        template="plotly_dark",
-        height=300,
-    )
-
-    st.plotly_chart(fig, use_container_width=True)
+# -----------------------------------------------------------------------------
+# Main app
+# -----------------------------------------------------------------------------
 
 
 def main():
-    """Main dashboard."""
-    st.title("📈 Otonom Trader - Portfolio Dashboard")
+    st.set_page_config(
+        page_title="Otonom Trader - Portfolio Dashboard",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+
+    st.title("Otonom Trader - Portfolio Dashboard")
     st.markdown("Real-time monitoring of autonomous trading system")
 
-    # Sidebar
-    with st.sidebar:
-        st.header("⚙️ Settings")
-        lookback_days = st.slider("Lookback Days", 1, 30, 7)
-        auto_refresh = st.checkbox("Auto Refresh (60s)", value=False)
+    orch_cfg = load_orchestrator_config()
 
-        st.markdown("---")
-        st.markdown("### About")
-        st.info(
-            "This dashboard provides read-only monitoring of the "
-            "Otonom Trader system. No trading actions can be performed from here."
-        )
+    with get_app_session() as sym_session:
+        universe = get_universe(sym_session)
 
-    # Auto-refresh
-    if auto_refresh:
-        st.empty()
-        import time
-        time.sleep(60)
-        st.rerun()
+    symbol_names = ["(All)"] + [s.symbol for s in universe]
+    symbol_choice = st.sidebar.selectbox("Symbol filter", symbol_names)
+    symbol_filter = None if symbol_choice == "(All)" else symbol_choice
 
-    # Get database session
-    with get_session() as session:
-        # ============================================================
-        # SECTION 1: Overview Metrics
-        # ============================================================
-        st.header("📊 Overview")
+    st.sidebar.header("Orchestrator Config (read-only)")
+    st.sidebar.json(orch_cfg)
 
-        col1, col2, col3, col4 = st.columns(4)
-
-        # Get latest portfolio snapshot
-        latest_snapshot = (
-            session.query(PortfolioSnapshot)
-            .order_by(PortfolioSnapshot.timestamp.desc())
-            .first()
-        )
-
-        if latest_snapshot:
-            with col1:
-                st.metric(
-                    "Portfolio Value",
-                    f"${latest_snapshot.equity:,.2f}",
-                    delta=None,
-                )
-            with col2:
-                st.metric(
-                    "Cash",
-                    f"${latest_snapshot.cash:,.2f}",
-                )
-            with col3:
-                st.metric(
-                    "Positions Value",
-                    f"${latest_snapshot.positions_value:,.2f}",
-                )
-            with col4:
-                drawdown_pct = latest_snapshot.max_drawdown * 100 if latest_snapshot.max_drawdown else 0
-                st.metric(
-                    "Max Drawdown",
-                    f"{drawdown_pct:.2f}%",
-                    delta=None,
-                    delta_color="inverse",
-                )
-        else:
-            st.warning("No portfolio data available yet. Run the daemon first.")
-
-        # ============================================================
-        # SECTION 2: Daemon Health
-        # ============================================================
-        st.header("🏥 Daemon Health")
-
-        daemon_stats = get_daemon_stats(session, lookback_days)
-
-        if daemon_stats:
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                st.metric("Total Runs", daemon_stats["total_runs"])
-            with col2:
-                success_rate = daemon_stats["success_rate"] * 100
-                st.metric("Success Rate", f"{success_rate:.1f}%")
-            with col3:
-                st.metric("Total Trades", daemon_stats["total_trades"])
-            with col4:
-                st.metric("Avg Duration", f"{daemon_stats['avg_duration']:.1f}s")
-
-            # Latest run status
-            if daemon_stats["latest_run"]:
-                latest = daemon_stats["latest_run"]
-                status_color = "green" if latest.status == "SUCCESS" else "red"
-                st.markdown(
-                    f"**Latest Run:** {latest.timestamp.strftime('%Y-%m-%d %H:%M:%S')} "
-                    f"| Status: :{status_color}[{latest.status}] "
-                    f"| Bars: {latest.bars_ingested or 0} "
-                    f"| Anomalies: {latest.anomalies_detected or 0} "
-                    f"| Decisions: {latest.decisions_made or 0} "
-                    f"| Trades: {latest.trades_executed or 0}"
-                )
-        else:
-            st.info("No daemon runs in the selected period.")
-
-        # ============================================================
-        # SECTION 3: Portfolio Performance
-        # ============================================================
-        st.header("💰 Portfolio Performance")
-
-        portfolio_df = get_portfolio_history(session)
-
-        if not portfolio_df.empty:
-            # Equity curve
-            plot_equity_curve(portfolio_df)
-
-            # Drawdown chart
-            plot_drawdown(portfolio_df)
-
-            # Performance metrics
-            if len(portfolio_df) > 1:
-                initial_equity = portfolio_df.iloc[0]["Equity"]
-                final_equity = portfolio_df.iloc[-1]["Equity"]
-                total_return = (final_equity - initial_equity) / initial_equity * 100
-                max_dd = portfolio_df["Drawdown"].max() * 100
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Total Return", f"{total_return:+.2f}%")
-                with col2:
-                    st.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
-        else:
-            st.info("No portfolio history available yet.")
-
-        # ============================================================
-        # SECTION 4: Recent Activity
-        # ============================================================
-        st.header("🔄 Recent Activity")
-
-        tab1, tab2, tab3, tab4 = st.tabs(["Anomalies", "Decisions", "Trades", "Details"])
-
-        with tab1:
-            st.subheader("Recent Anomalies")
-            anomalies_df = get_recent_anomalies(session, lookback_days)
-            if not anomalies_df.empty:
-                st.dataframe(anomalies_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No anomalies detected in the selected period.")
-
-        with tab2:
-            st.subheader("Recent Decisions")
-            decisions_df = get_recent_decisions(session, lookback_days)
-            if not decisions_df.empty:
-                st.dataframe(decisions_df, use_container_width=True, hide_index=True)
-
-                # Show full reasoning for selected decision
-                if not decisions_df.empty:
-                    with st.expander("View Full Decision Reasoning"):
-                        selected_idx = st.selectbox(
-                            "Select Decision",
-                            range(len(decisions_df)),
-                            format_func=lambda i: f"{decisions_df.iloc[i]['Date']} - {decisions_df.iloc[i]['Symbol']} - {decisions_df.iloc[i]['Signal']}",
-                        )
-                        full_reason = (
-                            session.query(Decision, Symbol.symbol)
-                            .join(Symbol)
-                            .filter(Decision.date >= date.today() - timedelta(days=lookback_days))
-                            .order_by(Decision.date.desc())
-                            .limit(50)
-                            .all()
-                        )[selected_idx][0].reason
-
-                        st.code(full_reason, language="text")
-            else:
-                st.info("No decisions made in the selected period.")
-
-        with tab3:
-            st.subheader("Recent Trades")
-            trades_df = get_recent_trades(session, lookback_days)
-            if not trades_df.empty:
-                st.dataframe(trades_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("No trades executed in the selected period.")
-
-        with tab4:
-            st.subheader("System Details")
-
-            # Database stats
-            st.markdown("**Database Statistics**")
-            total_symbols = session.query(Symbol).count()
-            total_anomalies = session.query(Anomaly).count()
-            total_decisions = session.query(Decision).count()
-            total_trades = session.query(PaperTrade).count()
-
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Symbols", total_symbols)
-            col2.metric("Anomalies", total_anomalies)
-            col3.metric("Decisions", total_decisions)
-            col4.metric("Trades", total_trades)
+    with get_app_session() as session:
+        render_overview(session, orch_cfg)
+        render_daemon_health(session)
+        render_portfolio_performance(session)
+        render_recent_activity(session, symbol_filter)
+        render_trades(session, symbol_filter)
+        render_news(session, symbol_filter)
+        render_raw_prices(session, symbol_filter)
 
 
 if __name__ == "__main__":

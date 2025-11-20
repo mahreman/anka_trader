@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import logging
 import shutil
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+from ..utils import utc_now
 
 
 def create_strategy_version(
@@ -81,7 +82,7 @@ def create_strategy_version(
 
     strategy_config["metadata"]["parent_strategy"] = old_name
     strategy_config["metadata"]["parent_version"] = old_version
-    strategy_config["metadata"]["created_at"] = datetime.utcnow().isoformat()
+    strategy_config["metadata"]["created_at"] = utc_now().isoformat()
     strategy_config["metadata"]["reason"] = reason or "Parameter tuning"
     strategy_config["metadata"]["param_changes"] = param_changes
 
@@ -140,7 +141,7 @@ def append_to_strategy_log(
     # Append new entry
     with open(log_file, "a") as f:
         f.write(f"## {version_name}\n\n")
-        f.write(f"**Date**: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+        f.write(f"**Date**: {utc_now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
         f.write(f"**Parent**: {parent_version}\n")
 
         if experiment_id:

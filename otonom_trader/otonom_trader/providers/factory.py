@@ -102,6 +102,10 @@ def create_news_provider(config: NewsProviderConfig) -> NewsProvider:
         from .news_newsapi import NewsAPIProvider
         return NewsAPIProvider(provider_config)
 
+    elif provider_type in {"yfinance", "yfinance_news"}:
+        from .news_yfinance import YFinanceNewsProvider
+        return YFinanceNewsProvider(provider_config)
+
     elif provider_type == "polygon_news":
         # TODO: Implement PolygonNewsProvider
         logger.warning("PolygonNewsProvider not implemented yet, using dummy")
@@ -138,7 +142,8 @@ def create_macro_provider(config: MacroProviderConfig) -> MacroProvider:
 
     provider_config = {
         "api_key": config.api_key,
-        "base_url": config.extra.get("base_url") if config.extra else None,
+        "base_url": config.base_url
+        or (config.extra.get("base_url") if config.extra else None),
         "timeout_seconds": config.timeout_seconds,
         "extra": config.extra,
     }

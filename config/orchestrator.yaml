@@ -1,0 +1,14 @@
+orchestrator:
+  enabled: true
+  interval_seconds: 900
+  mode: paper
+  price_interval: 15m
+  db_path: data/trader.db
+  strategy_path: strategies/baseline_v1.0.yaml
+  broker_config_path: config/broker.yaml
+  use_ensemble: true
+  paper_trade_enabled: true
+  paper_trade_risk_pct: 1.0
+  initial_cash: 100000.0
+  ingest_days_back: 7
+  anomaly_lookback_days: 30

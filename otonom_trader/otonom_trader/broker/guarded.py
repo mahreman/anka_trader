@@ -28,6 +28,7 @@ from .base import (
 )
 from ..data import get_session
 from ..data.schema import PortfolioSnapshot
+from ..utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class GuardedBroker(Broker):
 
         try:
             with get_session() as session:
-                today = datetime.utcnow().date()
+                today = utc_now().date()
                 yesterday = today - timedelta(days=1)
                 
                 # Get today's snapshots
